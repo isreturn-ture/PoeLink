@@ -1,0 +1,177 @@
+import { browser } from 'wxt/browser';
+
+interface Message {
+  type: string;
+  [key: string]: any;
+}
+
+interface ServerConfig {
+  host: string;
+  port: number;
+  protocol: string;
+  ip?: string;
+}
+
+interface PoeLinkConfig {
+  server: ServerConfig;
+  database?: any;
+  ops?: any;
+}
+
+class CommunicationService {
+  /**
+   * 向后台脚本发送消息
+   */
+  async sendMessageToBackground(message: Message): Promise<any> {
+    try {
+      const response = await browser.runtime.sendMessage(message);
+      return response;
+    } catch (error) {
+      console.error('向后台发送消息失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 监听来自后台的消息
+   */
+  onMessageFromBackground(callback: (message: Message, sender: any, sendResponse: (response?: any) => void) => boolean | undefined): () => void {
+    const listener = (message: Message, sender: any, sendResponse: (response?: any) => void) => {
+      return callback(message, sender, sendResponse);
+    };
+
+    browser.runtime.onMessage.addListener(listener);
+
+    return () => {
+      browser.runtime.onMessage.removeListener(listener);
+    };
+  }
+
+  /**
+   * 调用后端API (通过后台代理以避免CORS)
+   */
+  async callApi(endpoint: string, options: RequestInit = {}): Promise<any> {
+    try {
+      // 通过后台代理请求
+      return await this.sendMessageToBackground({
+        type: 'PROXY_REQUEST',
+        endpoint,
+        options
+      });
+    } catch (error) {
+      console.error('API调用失败:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 验证配置
+   */
+  async validateConfig(config: any): Promise<any> {
+    return this.sendMessageToBackground({
+      type: 'VALIDATE_CONFIG',
+      config: config
+    });
+  }
+
+  /**
+   * 同步Cookie
+   */
+  async syncCookies(data: any): Promise<any> {
+    return this.sendMessageToBackground({
+      type: 'SYNC_COOKIES',
+      data: data
+    });
+  }
+
+  /**
+   * 获取Cookie
+   */
+  async getCookies(server: any): Promise<any> {
+    return this.sendMessageToBackground({
+      type: 'GET_COOKIES',
+      server: server
+    });
+  }
+
+  /**
+   * 健康检查
+   */
+  async healthCheck(server: any): Promise<any> {
+    return this.sendMessageToBackground({
+      type: 'HEALTH_CHECK',
+      server: server
+    });
+  }
+
+  /**
+   * 下载日志
+   */
+  async downloadLog(filename: string): Promise<any> {
+    return this.sendMessageToBackground({
+      type: 'DOWNLOAD_LOG',
+      filename: filename
+    });
+  }
+
+  /**
+   * 发送通知
+   */
+  async sendNotification(options: any): Promise<void> {
+    try {
+      const runtimeBrowser = (globalThis as any).browser ?? (globalThis as any).chrome;
+      const notificationsApi = runtimeBrowser?.notifications;
+      console.log('[Notify] request', options);
+      if (typeof Notification !== 'undefined') {
+        console.log('[Notify] permission before', Notification.permission);
+        if (Notification.permission === 'default') {
+          await Notification.requestPermission();
+          console.log('[Notify] permission after request', Notification.permission);
+        }
+        if (Notification.permission === 'granted') {
+          const webOptions: NotificationOptions = {
+            body: options?.message ?? options?.body,
+            icon: options?.iconUrl ?? options?.icon,
+            tag: options?.tag,
+            data: options?.data,
+            requireInteraction: options?.requireInteraction,
+          };
+          const instance = new Notification(options?.title ?? 'PoeLink', webOptions);
+          instance.onerror = (event) => console.warn('[Notify] web notification error', event);
+          instance.onshow = () => console.log('[Notify] web notification shown');
+          instance.onclick = () => console.log('[Notify] web notification clicked');
+          instance.onclose = () => console.log('[Notify] web notification closed');
+          return;
+        }
+      }
+      if (notificationsApi?.create) {
+        console.log('[Notify] fallback to browser.notifications');
+        await notificationsApi.create('', options);
+        console.log('[Notify] browser.notifications created');
+        return;
+      }
+      console.log('[Notify] Notifications API unavailable, fallback to background');
+    } catch (error) {
+      console.warn('通知创建失败，回退到后台:', error);
+    }
+    await this.sendMessageToBackground({
+      type: 'notify',
+      options: options
+    });
+  }
+
+  /**
+   * 切换悬浮窗显示状态
+   * 发送消息给后台，后台再通知当前标签页
+   */
+  async toggleFloatingWindow(): Promise<void> {
+    try {
+      await this.sendMessageToBackground({ type: 'TOGGLE_FLOATING_BG' });
+    } catch (error) {
+      console.error('切换悬浮窗请求失败:', error);
+    }
+  }
+}
+
+const communicationService = new CommunicationService();
+export default communicationService;
