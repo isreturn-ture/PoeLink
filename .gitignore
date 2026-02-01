@@ -7,11 +7,22 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
+
+# Build output
 .output
+.wxt
+dist
 stats.html
 stats-*.json
-.wxt
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Extension tooling
 web-ext.config.ts
 
 # Editor directories and files
@@ -19,6 +30,7 @@ web-ext.config.ts
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
