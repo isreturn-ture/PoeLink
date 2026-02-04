@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { browser } from 'wxt/browser';
 import communicationService from './services/CommunicationService';
 import storageService from './services/StorageService';
 import { analyzeInputOnce, recognizeIntent } from './services/IntentService';
@@ -385,6 +386,39 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     };
   }, []);
 
+  useEffect(() => {
+    const handler = (changes: Record<string, any>, areaName: string) => {
+      if (areaName !== 'local') return;
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_messages')) {
+        const next = changes.poelink_messages?.newValue as Message[] | undefined;
+        if (Array.isArray(next)) setMessages(next);
+        else if (next == null) setMessages([]);
+      }
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_config')) {
+        const nextCfg = changes.poelink_config?.newValue as AppConfig | undefined;
+        if (nextCfg) {
+          setConfig({
+            ...defaultConfig,
+            ...nextCfg,
+            llm: nextCfg.llm ?? defaultConfig.llm,
+          });
+          const hasServer = !!(nextCfg.server?.host?.trim() && nextCfg.server?.port?.trim());
+          setIsConfigured(hasServer);
+          setIsConfigSaved(true);
+        } else {
+          setConfig(defaultConfig);
+          setIsConfigured(false);
+          setIsConfigSaved(false);
+        }
+      }
+    };
+
+    browser.storage.onChanged.addListener(handler);
+    return () => browser.storage.onChanged.removeListener(handler);
+  }, []);
+
   const hasServerConfig = useCallback(() => {
     return !!(config.server?.host?.trim() && config.server?.port?.trim());
   }, [config.server]);
@@ -462,6 +496,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     const optimisticMsgs = [...messages, userMsg];
 
     setMessages(optimisticMsgs);
+    saveMessages(optimisticMsgs);
     setInputValue('');
     setIsLoading(true);
 
@@ -588,6 +623,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       const final = [...optimisticMsgs, assistantMsg];
       setMessages(final);
+      saveMessages(final);
       // 流式展示完成后移除 streaming 标记并保存
       setTimeout(() => {
         setMessages((prev) => {

@@ -134,7 +134,12 @@ export async function analyzeInputOnce(
     messages: [
       {
         role: 'system',
-        content: '只输出JSON对象。字段: intentResult{intent,confidence,description}, entities{task,robotcode,time,error_keyword,log_type,log_level,error_type,system_type}, assistantReply。intent只能是troubleshoot/query_status/log_analysis/system_health_check/unknown。缺失填null。判定规则：若输入不包含任何运维信号(任务号/车号/数字编号/时间范围/日志/状态/故障/异常/错误/告警/下载/健康检查等)，且属于问候/闲聊/自我介绍/寒暄(如“你好/hi/在吗/你是谁/谢谢”)，则必须 intent=unknown 且 assistantReply 必须为非空自然中文(<=120字)；否则 assistantReply=null。'
+        content: `只输出JSON对象。字段: intentResult{intent,confidence,description}, entities{task,robotcode,time,error_keyword,log_type,log_level,error_type,system_type}, assistantReply。intent只能是troubleshoot/query_status/log_analysis/system_health_check/unknown。缺失填null。
+
+判定规则：
+1. 若输入包含运维信号（任务号/车号/数字编号/时间范围/日志/状态/故障/异常/错误/告警/下载/健康检查/排查/分析等），按对应运维意图处理，assistantReply=null；
+2. 若输入不包含任何运维信号，则视为非运维对话（包括问候、闲聊、身份询问、技术咨询、感谢等），intent=unknown，assistantReply必须为非空自然中文(<=120字)；
+3. 禁止在包含运维信号的回复中添加任何开场白或解释性内容。`
       },
       { role: 'user', content: input }
     ],
