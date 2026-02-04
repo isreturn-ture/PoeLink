@@ -9,7 +9,7 @@ interface Message {
 
 interface LLMConfig {
   apiKey: string;
-  provider: 'moonshot' | 'openai';
+  provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
 }
 

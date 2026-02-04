@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import communicationService from './services/CommunicationService';
 import storageService from './services/StorageService';
-import { recognizeIntent } from './services/IntentService';
+import { analyzeInputOnce, recognizeIntent } from './services/IntentService';
 import { extractEntities } from './services/EntityService';
 import { createLogger, safeJsonStringify } from '../../utils/logger';
 
@@ -60,7 +60,7 @@ interface OpsConfig {
 
 interface LLMConfig {
   apiKey: string;
-  provider: 'moonshot' | 'openai';
+  provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
 }
 
@@ -72,13 +72,18 @@ interface AppConfig {
   llm?: LLMConfig;
 }
 
+interface ComponentVersions {
+  rcs?: string;
+  iwms?: string;
+}
+
 type ConfigSection = Exclude<keyof AppConfig, 'configId' | 'llm'>;
 
 const defaultConfig: AppConfig = {
   server: { protocol: 'HTTP', host: '', port: '' },
   database: { address: '', user: '', pass: '' },
   ops: { ip: '', port: '' },
-  llm: { apiKey: '', provider: 'moonshot' },
+  llm: { apiKey: '', provider: 'siliconflow' },
 };
 
 // ================== 小组件开始 ==================
@@ -96,9 +101,10 @@ const BrandLogo = ({ className = '', size = 'md' }: { className?: string; size?:
   );
 };
 
-const Header = ({ title, subtitle, onBack, onClose, showClose = true, children }: {
+const Header = ({ title, subtitle, startAddon, onBack, onClose, showClose = true, children }: {
   title: string;
   subtitle?: React.ReactNode;
+  startAddon?: React.ReactNode;
   onBack?: () => void;
   onClose?: () => void;
   showClose?: boolean;
@@ -106,12 +112,17 @@ const Header = ({ title, subtitle, onBack, onClose, showClose = true, children }
 }) => (
   <header className="navbar bg-base-100 border-b border-base-300 shrink-0 px-4 py-3">
     <div className="navbar-start">
-      <div className="flex items-center gap-3">
-        <BrandLogo />
-        <div>
-          <h3 className="font-semibold text-base-content">{title}</h3>
+      <div className="flex items-center gap-3 w-full min-w-0">
+        <BrandLogo className="shrink-0" />
+        <div className="min-w-0">
+          <h3 className="font-semibold text-base-content truncate">{title}</h3>
           {subtitle && <p className="text-xs text-base-content/70">{subtitle}</p>}
         </div>
+        {startAddon && (
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1 max-w-[55%]">
+            {startAddon}
+          </div>
+        )}
       </div>
     </div>
     <div className="navbar-end gap-1">
@@ -263,17 +274,22 @@ const MessageBubble = ({ msg, index }: { msg: Message; index: number }) => {
                     <span className="text-base-content/50">{item.sender}→{item.receiver}</span>
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-base-content/70">
-                    <span>任务: {item.taskChainCode}</span>
-                    <span>子任务: {item.subTaskCode || '-'}</span>
-                    <span>请求: {item.reqCode || '-'}</span>
-                    <span>车号: {item.amrCode || '-'}</span>
-                    <span>货架: {item.carrierCode || '-'}</span>
-                    <span>位置: {item.slotCode || '-'} ({item.cooX || '-'}, {item.cooY || '-'})</span>
+                    {item.taskChainCode && <span>任务: {item.taskChainCode}</span>}
+                    {item.subTaskCode && <span>子任务: {item.subTaskCode}</span>}
+                    {item.reqCode && <span>请求: {item.reqCode}</span>}
+                    {item.amrCode && <span>车号: {item.amrCode}</span>}
+                    {item.carrierCode && <span>货架: {item.carrierCode}</span>}
+                    {(item.slotCode || item.cooX || item.cooY) && (
+                      <span>
+                        位置: {item.slotCode || '-'}
+                        {item.cooX || item.cooY ? ` (${item.cooX || '-'}, ${item.cooY || '-'})` : ''}
+                      </span>
+                    )}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-base-content/50">
-                    <span>创建: {item.createTime || '-'}</span>
-                    <span>开始: {item.startTime || '-'}</span>
-                    <span>更新: {item.updateTime || '-'}</span>
+                    {item.createTime && <span>创建: {item.createTime}</span>}
+                    {item.startTime && <span>开始: {item.startTime}</span>}
+                    {item.updateTime && <span>更新: {item.updateTime}</span>}
                   </div>
                 </div>
               ))}
@@ -304,6 +320,9 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  const [componentVersions, setComponentVersions] = useState<ComponentVersions>({});
+  const [versionLoading, setVersionLoading] = useState(false);
+
   const [config, setConfig] = useState<AppConfig>(() => defaultConfig);
   const [currentStep, setCurrentStep] = useState(1);
   const [isConfigured, setIsConfigured] = useState(false);
@@ -328,7 +347,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     if (typeof window === 'undefined') return;
     const isConfigView = view === 'config';
     const width = Math.min(window.innerWidth * 0.95, isConfigView ? 920 : 720);
-    const height = Math.min(window.innerHeight * 0.9, isConfigView ? 640 : 420);
+    const height = Math.min(window.innerHeight * 0.9, isConfigView ? 640 : 520);
     window.postMessage(
       { source: 'POELink', type: 'SET_UI_SIZE', width, height },
       '*'
@@ -416,6 +435,17 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   }, []);
 
   const handleSend = useCallback(async () => {
+    const isChitChatInput = (text: string): boolean => {
+      const s = String(text || '').trim();
+      if (!s) return false;
+      const lower = s.toLowerCase();
+
+      const hasOpsSignal = /(t\d{6,}|return\d{6,}|\d{3,6}|任务|状态|日志|故障|异常|错误|告警|报警|下载|检索|查询|健康|检查|cpu|内存|超时|失败|rcs|wcs|agv|amr|iwms)/i.test(lower);
+      if (hasOpsSignal) return false;
+
+      return /^(?:你好|您好|哈喽|嗨|hi|hello|hey|在吗|在么|你是谁|你叫什么|谢谢|谢了)[\s!！?？。,.，]*$/i.test(lower);
+    };
+
     if (!inputValue.trim() || isLoading) return;
     if (!hasServerConfig()) {
       const tipMsg: Message = {
@@ -438,10 +468,51 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     try {
       // 1. 前端完成意图识别和实体抽取（因后端无外网）
       const llmConfig = config.llm?.apiKey ? config.llm : null;
-      let [intentResult, entities] = await Promise.all([
-        recognizeIntent(userMsg.content, llmConfig),
-        extractEntities(userMsg.content, llmConfig)
-      ]);
+      let intentResult: any;
+      let entities: any;
+      let assistantReply: string | null | undefined;
+
+      if (llmConfig?.apiKey) {
+        try {
+          const combined = await analyzeInputOnce(userMsg.content, llmConfig);
+          intentResult = combined.intentResult;
+          entities = combined.entities;
+          assistantReply = combined.assistantReply;
+        } catch {
+          intentResult = await recognizeIntent(userMsg.content, null);
+          entities = await extractEntities(userMsg.content, null);
+        }
+      } else {
+        [intentResult, entities] = await Promise.all([
+          recognizeIntent(userMsg.content, null),
+          extractEntities(userMsg.content, null)
+        ]);
+      }
+
+      const forceChitChat = isChitChatInput(userMsg.content);
+      if (forceChitChat) {
+        const fallback = '你好，我是 PoeLink 助手。你可以描述需要排查的问题，或提供任务号/车号/时间范围，我会帮你分析。';
+        const normalizedReply = (assistantReply && String(assistantReply).trim()) || fallback;
+        assistantReply = normalizedReply;
+        intentResult = {
+          ...(intentResult || {}),
+          intent: 'unknown',
+          confidence: Math.min(Number(intentResult?.confidence ?? 0), 0.2),
+          description: '闲聊/问候'
+        };
+      }
+
+      if (intentResult?.intent === 'unknown' && assistantReply) {
+        const aiMsg: Message = {
+          role: 'assistant',
+          content: String(assistantReply).trim() || '你好，有什么我可以帮你的吗？'
+        };
+        const nextMsgs = [...optimisticMsgs, aiMsg];
+        setMessages(nextMsgs);
+        saveMessages(nextMsgs);
+        setIsLoading(false);
+        return;
+      }
 
       const loweredInput = userMsg.content.toLowerCase();
       const wantsLogs = loweredInput.includes('日志') || loweredInput.includes('log') || loweredInput.includes('下载');
@@ -460,15 +531,16 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
       }
 
       // 2. 统一通过 Chat 接口请求后端
-      const res = await communicationService.callApi('/api/chat', {
+      const res = await communicationService.callApiJson('/api/chat', {
         method: 'POST',
-        body: JSON.stringify({
+        body: {
           input: userMsg.content,
           configId: config.configId,
           description: intentResult?.description,
           intentResult,
           entities
-        }),
+        },
+        timeoutMs: 60000,
       });
 
       let content = typeof res === 'string'
@@ -560,7 +632,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     setConfig(prev => ({
       ...prev,
       llm: {
-        ...(prev.llm || { apiKey: '', provider: 'moonshot' }),
+        ...(prev.llm || { apiKey: '', provider: 'siliconflow' }),
         [field]: value,
       },
     }));
@@ -582,9 +654,10 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     try {
       // 真实调用：通过后端代理测试数据库连接
       // 假设后端有一个 /api/db/check 接口
-      const res = await communicationService.callApi('/api/db/check', {
+      const res = await communicationService.callApiJson('/api/db/check', {
         method: 'POST',
-        body: JSON.stringify(config.database)
+        body: config.database,
+        timeoutMs: 15000,
       });
       setDbTestStatus(res.success ? '连接成功' : `失败: ${res.message || '未知错误'}`);
     } catch (e: any) {
@@ -595,16 +668,150 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   const testOps = useCallback(async () => {
     setOpsTestStatus('测试中...');
     try {
-      // 真实调用：通过后端代理测试运管系统
-      const res = await communicationService.callApi('/api/ops/check', {
+      const res = await communicationService.callApiJson('/api/ops-service/connect/check', {
         method: 'POST',
-        body: JSON.stringify(config.ops)
+        body: {
+          ip: config.ops.ip,
+          port: config.ops.port,
+        },
+        timeoutMs: 15000,
       });
-      setOpsTestStatus(res.success ? '连接成功' : `失败: ${res.message || '未知错误'}`);
+      const ok = typeof (res as any)?.success === 'boolean' ? (res as any).success : true;
+      const msg = (res as any)?.message || (res as any)?.error;
+      setOpsTestStatus(ok ? '连接成功' : `失败: ${msg || '未知错误'}`);
     } catch (e: any) {
       setOpsTestStatus(`异常：${getFriendlyErrorMessage(e)}`);
     }
   }, [config.ops]);
+
+  const fetchComponentVersions = useCallback(async () => {
+    if (!hasServerConfig()) return;
+    if (!isConfigSaved) return;
+    setVersionLoading(true);
+    try {
+      const res = await communicationService.callApiJson('/api/ops-service/packages/version', {
+        method: 'GET',
+        query: {
+          configId: config.configId,
+          preferInstalled: true,
+        },
+        timeoutMs: 20000,
+      });
+
+      const unwrap = (v: any): any => {
+        if (!v || typeof v !== 'object') return v;
+        return v.data?.data ?? v.data ?? v.result ?? v;
+      };
+
+      const payload = unwrap(res);
+
+      const readDirect = (obj: any): ComponentVersions | null => {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+        const getStr = (...keys: string[]) => {
+          for (const k of keys) {
+            const v = obj?.[k];
+            if (typeof v === 'string' && v.trim()) return v.trim();
+          }
+          return undefined;
+        };
+        const rcs = getStr('rcs', 'RCS', 'rcsVersion', 'rcs_version', 'rcs_ver', 'rcsVer');
+        const iwms = getStr('iwms', 'IWMS', 'iwmsVersion', 'iwms_version', 'iwms_ver', 'iwmsVer', 'wms', 'WMS', 'wmsVersion', 'wms_version');
+        if (!rcs && !iwms) return null;
+        return { rcs, iwms };
+      };
+
+      const direct = readDirect(payload);
+      if (direct) {
+        setComponentVersions(direct);
+        return;
+      }
+
+      const list = Array.isArray(payload)
+        ? payload
+        : (Array.isArray(payload?.items)
+          ? payload.items
+          : (Array.isArray(payload?.list)
+            ? payload.list
+            : (Array.isArray(payload?.rows)
+              ? payload.rows
+              : [])));
+
+      const pickName = (item: any) => {
+        const candidates = [
+          item?.productName,
+          item?.product_name,
+          item?.productCode,
+          item?.product_code,
+          item?.code,
+          item?.name,
+        ];
+        const v = candidates.find((x) => typeof x === 'string' && x.trim());
+        return typeof v === 'string' ? v : '';
+      };
+
+      const pickCode = (item: any) => {
+        const candidates = [
+          item?.productCode,
+          item?.product_code,
+          item?.code,
+        ];
+        const v = candidates.find((x) => typeof x === 'string' && x.trim());
+        return typeof v === 'string' ? v : '';
+      };
+
+      const pickVersion = (item: any) => {
+        const candidates = [
+          item?.version,
+          item?.productVersion,
+          item?.product_version,
+          item?.versionNo,
+          item?.version_no,
+          item?.productVersionNo,
+          item?.product_version_no,
+          item?.displayVersion,
+          item?.display_version,
+          item?.releaseVersion,
+          item?.release_version,
+          item?.pkgVersion,
+          item?.pkg_version,
+          item?.packageVersion,
+          item?.package_version,
+        ];
+        const v = candidates.find((x) => typeof x === 'string' && x.trim());
+        return typeof v === 'string' ? v : '';
+      };
+
+      const versions: ComponentVersions = {};
+      for (const item of list) {
+        const code = pickCode(item).toLowerCase();
+        const name = pickName(item).toLowerCase();
+        const key = `${code} ${name}`;
+        const ver = pickVersion(item);
+        if (!ver) continue;
+        if (!versions.rcs && (key.includes('rcs') || key.includes('rcms') || key.includes('rtas'))) {
+          versions.rcs = ver;
+        }
+        if (!versions.iwms && (key.includes('iwms') || key.includes('wms'))) {
+          versions.iwms = ver;
+        }
+      }
+
+      if (versions.rcs || versions.iwms) {
+        setComponentVersions(versions);
+      } else {
+        setComponentVersions({});
+      }
+    } catch {
+      setComponentVersions({});
+    } finally {
+      setVersionLoading(false);
+    }
+  }, [config.configId, hasServerConfig, isConfigSaved]);
+
+  useEffect(() => {
+    if (view !== 'chat') return;
+    fetchComponentVersions();
+  }, [view, fetchComponentVersions]);
 
   const saveConfig = useCallback(async () => {
     let configId: string | undefined;
@@ -617,7 +824,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     const nextConfig = {
       ...config,
       configId,
-      llm: config.llm ?? { apiKey: '', provider: 'moonshot' }
+      llm: config.llm ?? { apiKey: '', provider: 'siliconflow' }
     };
     await storageService.setConfig(nextConfig);
     setConfig(nextConfig);
@@ -857,9 +1064,10 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
                   <p className="text-sm text-base-content/70 mb-4">后端无法连接外网，意图识别与实体抽取在前端完成。配置 API Key 后可使用 AI 识别，否则使用本地规则。</p>
                   <div className="space-y-4">
                     <label className="label"><span className="label-text">API Key</span></label>
-                    <input type="password" className="input input-bordered w-full transition-all duration-200 focus:ring-2 focus:ring-primary/20" placeholder="Moonshot 或 OpenAI API Key（可选）" value={config.llm?.apiKey ?? ''} onChange={(e) => updateLlmConfig('apiKey', e.target.value)} />
+                    <input type="password" className="input input-bordered w-full transition-all duration-200 focus:ring-2 focus:ring-primary/20" placeholder="SiliconFlow / Moonshot / OpenAI API Key（可选）" value={config.llm?.apiKey ?? ''} onChange={(e) => updateLlmConfig('apiKey', e.target.value)} />
                     <label className="label"><span className="label-text">提供商</span></label>
-                    <select className="select select-bordered w-full transition-all duration-200 focus:ring-2 focus:ring-primary/20" value={config.llm?.provider ?? 'moonshot'} onChange={(e) => updateLlmConfig('provider', e.target.value as 'moonshot' | 'openai')}>
+                    <select className="select select-bordered w-full transition-all duration-200 focus:ring-2 focus:ring-primary/20" value={config.llm?.provider ?? 'siliconflow'} onChange={(e) => updateLlmConfig('provider', e.target.value as LLMConfig['provider'])}>
+                      <option value="siliconflow">SiliconFlow (GLM)</option>
                       <option value="moonshot">Moonshot (月之暗面 / Kimi)</option>
                       <option value="openai">OpenAI</option>
                     </select>
@@ -906,6 +1114,18 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     <div className="flex flex-col h-full min-h-0 bg-base-100">
       <Header
         title="PoeLink"
+        startAddon={
+          serverConfigured ? (
+            versionLoading ? (
+              <span className="loading loading-spinner loading-xs" />
+            ) : (componentVersions.rcs || componentVersions.iwms) ? (
+              <div className="flex flex-wrap items-center justify-end gap-1">
+                {componentVersions.rcs && <span className="badge badge-outline badge-xs whitespace-nowrap">RCS {componentVersions.rcs}</span>}
+                {componentVersions.iwms && <span className="badge badge-outline badge-xs whitespace-nowrap">IWMS {componentVersions.iwms}</span>}
+              </div>
+            ) : null
+          ) : null
+        }
         subtitle={
           (() => {
             const hasServer = !!(config.server?.host?.trim() && config.server?.port?.trim());
@@ -970,7 +1190,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
         </div>
       </Header>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-4 bg-base-100">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4 space-y-4 bg-base-100">
         {!serverConfigured && (
           <div className="rounded-2xl border border-warning/30 bg-base-100 px-4 py-3 text-sm text-warning-content flex flex-wrap items-center gap-3">
             <span className="font-medium">未完成配置，暂无法发起 AMR 排查。</span>
@@ -985,7 +1205,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
           </div>
         )}
         {!serverConfigured ? (
-          <div className="min-h-[240px] flex flex-col items-center justify-center py-12 animate-fade-in-up text-center">
+          <div className="flex flex-col items-center justify-center py-8 animate-fade-in-up text-center">
             <div className="avatar placeholder mb-4">
               <div className="w-20 h-20 rounded-full bg-warning/10 border-2 border-warning/30 flex items-center justify-center">
                 <svg className="w-10 h-10 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1004,7 +1224,7 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
             </button>
           </div>
         ) : messages.length === 0 && !isLoading ? (
-          <div className="min-h-[200px] flex flex-col items-center justify-center py-12 animate-fade-in-up">
+          <div className="flex flex-col items-center justify-center py-8 animate-fade-in-up">
             <div className="avatar placeholder mb-4">
               <div className="w-20 h-20 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center">
                 <svg className="w-10 h-10 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">

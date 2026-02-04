@@ -1,4 +1,5 @@
 import { createLogger } from '../../../utils/logger';
+import communicationService from './CommunicationService';
 
 const logIntent = createLogger('intent');
 
@@ -15,8 +16,15 @@ export interface IntentResult {
 
 export interface LLMConfig {
   apiKey: string;
-  provider: 'moonshot' | 'openai';
+  provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
+}
+
+export interface CombinedAnalysisResult {
+  intentResult: IntentResult;
+  entities: Record<string, unknown>;
+  assistantReply?: string | null;
+  ai_raw?: Record<string, unknown>;
 }
 
 const INTENTS = {
@@ -83,7 +91,98 @@ function localRecognizeIntent(input: string): IntentResult {
 function getApiBaseUrl(config: LLMConfig): string {
   if (config.baseURL) return config.baseURL;
   if (config.provider === 'moonshot') return 'https://api.moonshot.cn/v1';
+  if (config.provider === 'siliconflow') return 'https://api.siliconflow.cn/v1';
   return 'https://api.openai.com/v1';
+}
+
+function getDefaultModel(config: LLMConfig): string {
+  if (config.provider === 'moonshot') return 'moonshot-v1-8k';
+  if (config.provider === 'siliconflow') return 'THUDM/GLM-Z1-9B-0414';
+  return 'gpt-3.5-turbo';
+}
+
+function normalizeEntities(input: any): Record<string, unknown> {
+  const src = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  const toStrOrNull = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+  const toStrArrOrNull = (v: any) => {
+    if (!Array.isArray(v)) return null;
+    const arr = v.map(x => (typeof x === 'string' ? x.trim() : '')).filter(Boolean);
+    return arr.length ? arr : null;
+  };
+
+  return {
+    task: toStrOrNull((src as any).task),
+    robotcode: toStrOrNull((src as any).robotcode),
+    time: toStrOrNull((src as any).time),
+    error_keyword: toStrArrOrNull((src as any).error_keyword),
+    log_type: toStrOrNull((src as any).log_type),
+    log_level: toStrOrNull((src as any).log_level),
+    error_type: toStrOrNull((src as any).error_type),
+    system_type: toStrOrNull((src as any).system_type),
+  };
+}
+
+export async function analyzeInputOnce(
+  input: string,
+  llmConfig: LLMConfig
+): Promise<CombinedAnalysisResult> {
+  const baseURL = getApiBaseUrl(llmConfig);
+  const model = getDefaultModel(llmConfig);
+
+  const responseBody: Record<string, unknown> = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: '只输出JSON对象。字段: intentResult{intent,confidence,description}, entities{task,robotcode,time,error_keyword,log_type,log_level,error_type,system_type}, assistantReply。intent只能是troubleshoot/query_status/log_analysis/system_health_check/unknown。缺失填null。判定规则：若输入不包含任何运维信号(任务号/车号/数字编号/时间范围/日志/状态/故障/异常/错误/告警/下载/健康检查等)，且属于问候/闲聊/自我介绍/寒暄(如“你好/hi/在吗/你是谁/谢谢”)，则必须 intent=unknown 且 assistantReply 必须为非空自然中文(<=120字)；否则 assistantReply=null。'
+      },
+      { role: 'user', content: input }
+    ],
+    temperature: 0.2,
+  };
+
+  if (llmConfig.provider === 'moonshot') {
+    responseBody.response_format = { type: 'json_object' };
+  }
+
+  const data = await communicationService.callExternalJson(`${baseURL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${llmConfig.apiKey}`
+    },
+    body: responseBody,
+    timeoutMs: 30000,
+  });
+
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('空响应');
+
+  let jsonStr = String(content).trim();
+  if (jsonStr.startsWith('```')) {
+    jsonStr = jsonStr.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+  }
+  const parsed = JSON.parse(jsonStr) as any;
+  const intentResult = (parsed?.intentResult ?? parsed?.intent ?? parsed) as any;
+  const entities = normalizeEntities(parsed?.entities ?? parsed);
+  const assistantReply = parsed?.assistantReply;
+
+  const intent = String(intentResult?.intent ?? 'unknown');
+  const safeIntent: IntentResult['intent'] = (INTENT_TYPES as readonly string[]).includes(intent)
+    ? (intent as IntentResult['intent'])
+    : (intent === 'unknown' ? 'unknown' : 'unknown');
+
+  return {
+    intentResult: {
+      intent: safeIntent,
+      confidence: Math.min(1, Math.max(0, Number(intentResult?.confidence ?? 0.5))),
+      description: String(intentResult?.description ?? '未知意图'),
+      ai_analysis: typeof parsed === 'object' && parsed ? (parsed as Record<string, unknown>) : undefined,
+    },
+    entities,
+    assistantReply: typeof assistantReply === 'string' ? assistantReply.slice(0, 200) : (assistantReply == null ? null : undefined),
+    ai_raw: typeof parsed === 'object' && parsed ? (parsed as Record<string, unknown>) : undefined,
+  };
 }
 
 export async function recognizeIntent(
@@ -97,8 +196,9 @@ export async function recognizeIntent(
   if (llmConfig?.apiKey) {
     try {
       const baseURL = getApiBaseUrl(llmConfig);
+      const model = getDefaultModel(llmConfig);
       const responseBody: Record<string, unknown> = {
-        model: llmConfig.provider === 'moonshot' ? 'moonshot-v1-8k' : 'gpt-3.5-turbo',
+        model,
         messages: [
           {
             role: 'system',
@@ -113,21 +213,15 @@ export async function recognizeIntent(
         responseBody.response_format = { type: 'json_object' };
       }
 
-      const response = await fetch(`${baseURL}/chat/completions`, {
+      const data = await communicationService.callExternalJson(`${baseURL}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${llmConfig.apiKey}`
         },
-        body: JSON.stringify(responseBody)
+        body: responseBody,
+        timeoutMs: 30000,
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`API ${response.status}: ${errText.slice(0, 200)}`);
-      }
-
-      const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
       if (!content) throw new Error('空响应');
 

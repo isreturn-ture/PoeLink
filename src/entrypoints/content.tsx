@@ -31,7 +31,7 @@ class ContentScript {
 
   // 尺寸与缩放
   private popupWidth = Math.min(window.innerWidth * 0.95, 720);
-  private popupHeight = Math.min(window.innerHeight * 0.8, 420);
+  private popupHeight = Math.min(window.innerHeight * 0.85, 520);
   private readonly MIN_WIDTH = 320;
   private readonly MIN_HEIGHT = 280;
   private readonly MAX_WIDTH = 1200;
@@ -636,9 +636,14 @@ export default defineContentScript({
   runAt: 'document_idle',
   cssInjectionMode: 'ui',
   main(ctx) {
-    if (typeof window !== 'undefined' && !window.POELinkContentScript) {
-      window.POELinkContentScript = new ContentScript(ctx);
-    }
+    if (typeof window === 'undefined' || window.POELinkContentScript) return;
+
+    const currentUrl = window.location.href.toLowerCase();
+    const allowKeywords = ['ops', 'portal', 'rcs', 'wms'];
+    const shouldShow = allowKeywords.some((keyword) => currentUrl.includes(keyword));
+    if (!shouldShow) return;
+
+    window.POELinkContentScript = new ContentScript(ctx);
   },
 });
 

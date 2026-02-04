@@ -1,4 +1,5 @@
 import { createLogger } from '../../../utils/logger';
+import communicationService from './CommunicationService';
 
 const logEntity = createLogger('entity');
 
@@ -20,7 +21,7 @@ export interface ExtractedEntities {
 
 export interface LLMConfig {
   apiKey: string;
-  provider: 'moonshot' | 'openai';
+  provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
 }
 
@@ -96,7 +97,14 @@ function localExtractEntities(input: string): ExtractedEntities {
 function getApiBaseUrl(config: LLMConfig): string {
   if (config.baseURL) return config.baseURL;
   if (config.provider === 'moonshot') return 'https://api.moonshot.cn/v1';
+  if (config.provider === 'siliconflow') return 'https://api.siliconflow.cn/v1';
   return 'https://api.openai.com/v1';
+}
+
+function getDefaultModel(config: LLMConfig): string {
+  if (config.provider === 'moonshot') return 'moonshot-v1-8k';
+  if (config.provider === 'siliconflow') return 'THUDM/GLM-Z1-9B-0414';
+  return 'gpt-3.5-turbo';
 }
 
 export async function extractEntities(
@@ -108,8 +116,9 @@ export async function extractEntities(
   if (llmConfig?.apiKey) {
     try {
       const baseURL = getApiBaseUrl(llmConfig);
+      const model = getDefaultModel(llmConfig);
       const responseBody: Record<string, unknown> = {
-        model: llmConfig.provider === 'moonshot' ? 'moonshot-v1-8k' : 'gpt-3.5-turbo',
+        model,
         messages: [
           {
             role: 'system',
@@ -124,18 +133,15 @@ export async function extractEntities(
         responseBody.response_format = { type: 'json_object' };
       }
 
-      const response = await fetch(`${baseURL}/chat/completions`, {
+      const data = await communicationService.callExternalJson(`${baseURL}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${llmConfig.apiKey}`
         },
-        body: JSON.stringify(responseBody)
+        body: responseBody,
+        timeoutMs: 30000,
       });
-
-      if (!response.ok) throw new Error(`API ${response.status}`);
-
-      const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
       if (!content) throw new Error('空响应');
 

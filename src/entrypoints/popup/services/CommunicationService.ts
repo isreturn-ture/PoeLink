@@ -67,6 +67,80 @@ class CommunicationService {
     }
   }
 
+  async callApiJson<T = any>(
+    endpoint: string,
+    params: {
+      method?: string;
+      query?: Record<string, string | number | boolean | null | undefined>;
+      body?: unknown;
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<T> {
+    const method = (params.method || 'GET').toUpperCase();
+    const query = params.query || {};
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined || v === null) continue;
+      qs.set(k, String(v));
+    }
+    const withQuery = qs.toString() ? `${endpoint}${endpoint.includes('?') ? '&' : '?'}${qs.toString()}` : endpoint;
+
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      ...(params.headers || {})
+    };
+
+    const init: RequestInit & { timeoutMs?: number } = {
+      method,
+      headers,
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+    };
+
+    if (method !== 'GET' && method !== 'HEAD' && params.body !== undefined) {
+      if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      init.body = typeof params.body === 'string' ? params.body : JSON.stringify(params.body);
+    }
+
+    return await this.callApi(withQuery, init);
+  }
+
+  async callExternalJson<T = any>(
+    url: string,
+    params: {
+      method?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<T> {
+    const method = (params.method || 'GET').toUpperCase();
+    const headers: Record<string, string> = {
+      ...(params.headers || {})
+    };
+
+    const init: RequestInit & { timeoutMs?: number } = {
+      method,
+      headers,
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+    };
+
+    if (method !== 'GET' && method !== 'HEAD' && params.body !== undefined) {
+      if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+      init.body = typeof params.body === 'string' ? params.body : JSON.stringify(params.body);
+    }
+
+    return await this.sendMessageToBackground({
+      type: 'EXTERNAL_REQUEST',
+      url,
+      options: init,
+    });
+  }
+
   /**
    * 验证配置
    */

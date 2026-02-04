@@ -66,6 +66,9 @@ export default defineBackground({
             case 'PROXY_REQUEST':
               return await handleProxyRequest(request.endpoint, request.options);
 
+            case 'EXTERNAL_REQUEST':
+              return await handleExternalRequest(request.url, request.options);
+
             case 'SYNC_COOKIES':
               return await handleCookieSync(request.data);
 
@@ -122,22 +125,118 @@ async function handleProxyRequest(endpoint: string, options: RequestInit = {}) {
     headers['Content-Type'] = 'application/json';
   }
 
-  const response = await fetch(url, { ...options, headers });
+  const controller = new AbortController();
+  const timeoutMs = typeof (options as any)?.timeoutMs === 'number' ? Number((options as any).timeoutMs) : 15000;
+  const timeoutId = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+
+  const upstreamSignal = options.signal;
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) controller.abort();
+    else upstreamSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      credentials: (options.credentials as RequestCredentials) ?? 'include',
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (controller.signal.aborted) {
+      throw new Error('请求超时');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   
   if (!response.ok) {
-    // 尝试读取错误信息
     let errorMsg = response.statusText;
     try {
-      const errorBody = await response.json();
-      if (errorBody && errorBody.message) errorMsg = errorBody.message;
+      const ct = response.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const errorBody = await response.json();
+        const candidate = (errorBody && (errorBody.message || errorBody.error || errorBody.msg)) as unknown;
+        if (typeof candidate === 'string' && candidate.trim()) errorMsg = candidate;
+        else errorMsg = JSON.stringify(errorBody).slice(0, 300);
+      } else {
+        const errorText = await response.text();
+        if (errorText?.trim()) errorMsg = errorText.slice(0, 300);
+      }
     } catch {}
     throw new Error(`API请求失败: ${response.status} ${errorMsg}`);
   }
 
-  // 尝试解析 JSON，如果失败则返回文本
+  const ct = response.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    return await response.json();
+  }
+
   const text = await response.text();
   try {
-    return JSON.parse(text); // 直接返回数据，不包装在 success 中，由调用方处理
+    return JSON.parse(text);
+  } catch {
+    return { result: text };
+  }
+}
+
+async function handleExternalRequest(url: string, options: RequestInit = {}) {
+  if (!url || typeof url !== 'string') throw new Error('缺少请求地址');
+  if (!/^https?:\/\//i.test(url)) throw new Error('非法请求地址');
+
+  const headers = { ...options.headers } as Record<string, string>;
+  if (!headers['Accept']) headers['Accept'] = 'application/json';
+
+  const controller = new AbortController();
+  const timeoutMs = typeof (options as any)?.timeoutMs === 'number' ? Number((options as any).timeoutMs) : 20000;
+  const timeoutId = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
+
+  const upstreamSignal = options.signal;
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) controller.abort();
+    else upstreamSignal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (controller.signal.aborted) throw new Error('请求超时');
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    let errorMsg = response.statusText;
+    try {
+      const ct = response.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const errorBody = await response.json();
+        const candidate = (errorBody && (errorBody.message || errorBody.error || errorBody.msg)) as unknown;
+        if (typeof candidate === 'string' && candidate.trim()) errorMsg = candidate;
+        else errorMsg = JSON.stringify(errorBody).slice(0, 300);
+      } else {
+        const errorText = await response.text();
+        if (errorText?.trim()) errorMsg = errorText.slice(0, 300);
+      }
+    } catch {}
+    throw new Error(`API请求失败: ${response.status} ${errorMsg}`);
+  }
+
+  const ct = response.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    return await response.json();
+  }
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
   } catch {
     return { result: text };
   }

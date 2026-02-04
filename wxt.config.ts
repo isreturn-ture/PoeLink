@@ -14,7 +14,8 @@ export default defineConfig({
     host_permissions: [
       '*://*/*',
       'https://api.moonshot.cn/*',
-      'https://api.openai.com/*'
+      'https://api.openai.com/*',
+      'https://api.siliconflow.cn/*'
     ],
     web_accessible_resources: [
       {
