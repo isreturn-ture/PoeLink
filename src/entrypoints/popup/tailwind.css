@@ -19,6 +19,29 @@
   --shadow: 15 23 42;
 }
 
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: 15 23 42;
+  --bg-elevated: 17 24 39;
+  --bg-muted: 30 41 59;
+  --text: 226 232 240;
+  --text-muted: 148 163 184;
+  --primary: 96 165 250;
+  --primary-strong: 59 130 246;
+  --primary-soft: 30 58 138;
+  --secondary: 148 163 184;
+  --border: 51 65 85;
+  --border-strong: 71 85 105;
+  --success: 34 197 94;
+  --error: 248 113 113;
+  --info: 96 165 250;
+  --shadow: 0 0 0;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -324,6 +347,11 @@ html, body {
   }
 
   .menu button:hover {
+    background: rgb(var(--primary-soft));
+    color: rgb(var(--primary));
+  }
+
+  .menu button.active {
     background: rgb(var(--primary-soft));
     color: rgb(var(--primary));
   }

@@ -14,10 +14,11 @@ PoeLink 是一款基于 WXT + React 的浏览器插件，用于作为 **AMR（�
 ### AI 能力
 - **意图识别** - 自动识别用户查询意图（故障排查、状态查询、日志分析、系统健康检查）
 - **实体抽取** - 从自然语言中提取任务号、车号、时间范围、异常关键词等实体
-- **本地规则 + LLM** - 支持本地规则匹配和 LLM API（Moonshot/OpenAI）两种模式
+- **本地规则 + LLM** - 支持本地规则匹配和 LLM API（SiliconFlow/Moonshot/OpenAI）两种模式
 
 ### 配置管理
 - **4 步配置向导** - 服务器、数据库、运管系统、LLM 配置
+- **应用配置** - 主题、语言、流式输出速度、自动同步 Cookie 等
 - **连接测试** - 支持各配置项的连接测试
 - **本地存储** - 配置和聊天记录持久化存储
 
@@ -26,7 +27,7 @@ PoeLink 是一款基于 WXT + React 的浏览器插件，用于作为 **AMR（�
 ### 技术栈
 - **框架**: WXT 0.20+（浏览器扩展开发框架）
 - **UI**: React 19 + TypeScript
-- **样式**: Tailwind CSS 4
+- **样式**: Tailwind CSS 4 
 - **构建**: Vite（通过 WXT）
 
 ### 架构设计
@@ -158,9 +159,9 @@ npm run dev:firefox
 - **IP 地址**: 运管系统 IP
 - **端口**: 运管系统端口
 
-#### 步骤 4: LLM 配置（可选）
-- **API Key**: Moonshot 或 OpenAI API Key
-- **提供商**: 选择 Moonshot 或 OpenAI
+#### LLM 配置（可选）
+- **API Key**: SiliconFlow、Moonshot 或 OpenAI API Key
+- **提供商**: 选择 SiliconFlow、Moonshot 或 OpenAI
 
 > **注意**: 配置 LLM 后，意图识别和实体抽取将使用 AI 模型，识别准确率更高。未配置时使用本地规则匹配。
 
@@ -187,15 +188,27 @@ src/
 │   ├── background.ts          # 后台脚本（消息路由、API 代理、Cookie 同步）
 │   ├── content.tsx           # 内容脚本（悬浮球 UI、拖拽缩放）
 │   └── popup/               # 弹窗页面
+│       ├── components/       # 组件
+│       │   ├── BrandLogo.tsx
+│       │   ├── ChatInput.tsx
+│       │   ├── Header.tsx
+│       │   └── MessageBubble.tsx
+│       ├── services/        # 服务层
+│       │   ├── CommunicationService.ts  # 通信服务
+│       │   ├── StorageService.ts       # 存储服务
+│       │   ├── IntentService.ts        # 意图识别
+│       │   └── EntityService.ts       # 实体抽取
+│       ├── views/           # 视图
+│       │   ├── ChatView.tsx
+│       │   ├── ConfigView.tsx
+│       │   └── WelcomeView.tsx
 │       ├── index.html        # HTML 模板
 │       ├── main.tsx         # React 入口
 │       ├── App.tsx          # 主组件
 │       ├── tailwind.css     # 样式文件
-│       └── services/        # 服务层
-│           ├── CommunicationService.ts  # 通信服务
-│           ├── StorageService.ts       # 存储服务
-│           ├── IntentService.ts        # 意图识别
-│           └── EntityService.ts       # 实体抽取
+│       └── types.ts         # 类型定义
+├── utils/                   # 工具函数
+│   └── logger.ts            # 日志工具
 public/
 └── icon/                   # 扩展图标
 ```
@@ -207,10 +220,19 @@ public/
 | [background.ts](src/entrypoints/background.ts) | 后台脚本，处理消息路由、API 代理、Cookie 同步任务 |
 | [content.tsx](src/entrypoints/content.tsx) | 内容脚本，注入悬浮球 UI，实现拖拽和缩放功能 |
 | [App.tsx](src/entrypoints/popup/App.tsx) | 主组件，包含欢迎页、配置页、聊天页 |
+| [types.ts](src/entrypoints/popup/types.ts) | 类型定义，包含消息、配置等类型 |
 | [CommunicationService.ts](src/entrypoints/popup/services/CommunicationService.ts) | 通信服务，封装与后台和后端的通信 |
-| [StorageService.ts](src/entrypoints/popup/services/StorageService.ts) | 存储服务，封装浏览器存储 API |
-| [IntentService.ts](src/entrypoints/popup/services/IntentService.ts) | 意图识别服务，支持本地规则和 LLM |
-| [EntityService.ts](src/entrypoints/popup/services/EntityService.ts) | 实体抽取服务，支持本地规则和 LLM |
+| [StorageService.ts](src/entrypoints/popup/services/StorageService.ts) | 存储服务，封装浏览器存储 API，支持会话管理 |
+| [IntentService.ts](src/entrypoints/popup/services/IntentService.ts) | 意图识别服务，支持本地规则和 LLM API |
+| [EntityService.ts](src/entrypoints/popup/services/EntityService.ts) | 实体抽取服务，从自然语言中提取实体 |
+| [WelcomeView.tsx](src/entrypoints/popup/views/WelcomeView.tsx) | 欢迎页面 |
+| [ConfigView.tsx](src/entrypoints/popup/views/ConfigView.tsx) | 配置页面，包含服务配置、LLM 配置、应用配置 |
+| [ChatView.tsx](src/entrypoints/popup/views/ChatView.tsx) | 聊天页面，包含消息展示、历史记录、会话管理 |
+| [BrandLogo.tsx](src/entrypoints/popup/components/BrandLogo.tsx) | 品牌 Logo 组件 |
+| [ChatInput.tsx](src/entrypoints/popup/components/ChatInput.tsx) | 聊天输入组件 |
+| [Header.tsx](src/entrypoints/popup/components/Header.tsx) | 头部组件 |
+| [MessageBubble.tsx](src/entrypoints/popup/components/MessageBubble.tsx) | 消息气泡组件 |
+| [logger.ts](src/utils/logger.ts) | 日志工具，提供统一的日志记录功能 |
 
 ## API 说明
 
@@ -318,8 +340,15 @@ interface AppConfig {
   };
   llm?: {
     apiKey: string;
-    provider: 'moonshot' | 'openai';
+    provider: 'moonshot' | 'openai' | 'siliconflow';
     baseURL?: string;
+    model?: string;
+  };
+  app?: {
+    theme: 'system' | 'light' | 'dark';
+    language: 'zh-CN' | 'en-US';
+    streamSpeed: 'fast' | 'normal' | 'slow';
+    autoSyncCookies: boolean;
   };
 }
 ```

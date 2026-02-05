@@ -23,6 +23,7 @@ export interface LLMConfig {
   apiKey: string;
   provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
+  model?: string;
 }
 
 const PATTERNS = {
@@ -107,6 +108,11 @@ function getDefaultModel(config: LLMConfig): string {
   return 'gpt-3.5-turbo';
 }
 
+function resolveModel(config: LLMConfig): string {
+  const m = typeof config.model === 'string' ? config.model.trim() : '';
+  return m ? m : getDefaultModel(config);
+}
+
 export async function extractEntities(
   input: string,
   llmConfig: LLMConfig | null
@@ -116,7 +122,7 @@ export async function extractEntities(
   if (llmConfig?.apiKey) {
     try {
       const baseURL = getApiBaseUrl(llmConfig);
-      const model = getDefaultModel(llmConfig);
+      const model = resolveModel(llmConfig);
       const responseBody: Record<string, unknown> = {
         model,
         messages: [

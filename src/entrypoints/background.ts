@@ -19,6 +19,9 @@ interface PoeLinkConfig {
   server: ServerConfig;
   database?: any;
   ops?: any;
+  app?: {
+    autoSyncCookies?: boolean;
+  };
 }
 
 export default defineBackground({
@@ -73,7 +76,7 @@ export default defineBackground({
               return await handleCookieSync(request.data);
 
             case 'TRIGGER_COOKIE_SYNC':
-              await runCookieSyncTask();
+              await runCookieSyncTask(true);
               return { success: true };
 
             case 'GET_COOKIES':
@@ -102,7 +105,7 @@ export default defineBackground({
     });
 
     // 定时同步Cookie任务 - 每30秒执行一次
-    setInterval(runCookieSyncTask, 30000);
+    setInterval(() => runCookieSyncTask(false), 30000);
 
     logBg.info('后台服务工作线程已启动');
   }
@@ -338,9 +341,10 @@ async function handleLogDownload(filename: string) {
   };
 }
 
-async function runCookieSyncTask() {
+async function runCookieSyncTask(force: boolean) {
   try {
     const cfg = await getPoeLinkConfig();
+    if (!force && cfg?.app && cfg.app.autoSyncCookies === false) return;
     const backend = cfg?.server;
     const ops = cfg?.ops;
     if (!backend || !ops?.ip) return;

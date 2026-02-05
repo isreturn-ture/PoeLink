@@ -18,6 +18,7 @@ export interface LLMConfig {
   apiKey: string;
   provider: 'moonshot' | 'openai' | 'siliconflow';
   baseURL?: string;
+  model?: string;
 }
 
 export interface CombinedAnalysisResult {
@@ -101,6 +102,11 @@ function getDefaultModel(config: LLMConfig): string {
   return 'gpt-3.5-turbo';
 }
 
+function resolveModel(config: LLMConfig): string {
+  const m = typeof config.model === 'string' ? config.model.trim() : '';
+  return m ? m : getDefaultModel(config);
+}
+
 function normalizeEntities(input: any): Record<string, unknown> {
   const src = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
   const toStrOrNull = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -127,7 +133,7 @@ export async function analyzeInputOnce(
   llmConfig: LLMConfig
 ): Promise<CombinedAnalysisResult> {
   const baseURL = getApiBaseUrl(llmConfig);
-  const model = getDefaultModel(llmConfig);
+  const model = resolveModel(llmConfig);
 
   const responseBody: Record<string, unknown> = {
     model,
@@ -201,7 +207,7 @@ export async function recognizeIntent(
   if (llmConfig?.apiKey) {
     try {
       const baseURL = getApiBaseUrl(llmConfig);
-      const model = getDefaultModel(llmConfig);
+      const model = resolveModel(llmConfig);
       const responseBody: Record<string, unknown> = {
         model,
         messages: [
