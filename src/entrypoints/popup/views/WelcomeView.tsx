@@ -1,6 +1,6 @@
 import React from 'react';
 
-import BrandLogo from '../components/BrandLogo';
+import BrandLogo from '../../../components/popup/BrandLogo';
 
 const WelcomeView = ({ onStartConfig }: { onStartConfig: () => void }) => {
   return (

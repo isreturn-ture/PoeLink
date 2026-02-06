@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 
-import { safeJsonStringify } from '../../../utils/logger';
+import { safeJsonStringify } from '../../utils/logger';
 
-import type { Message } from '../types';
+import type { Message, TimelineItem } from '../../entrypoints/popup/types';
 
 const STREAM_CHUNK_SIZE = 3;
 
@@ -25,7 +25,7 @@ const MessageBubble = ({ msg, index, streamIntervalMs }: { msg: Message; index: 
   const text = msg.streaming ? msg.content.slice(0, displayLen) : msg.content;
   const isUser = msg.role === 'user';
 
-  const timeline = Array.isArray(msg.timeline) ? msg.timeline : [];
+  const timeline: TimelineItem[] = Array.isArray(msg.timeline) ? msg.timeline : [];
   const rawThirdMsg = msg.rawThirdMsg;
 
   return (

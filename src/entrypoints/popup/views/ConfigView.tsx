@@ -1,6 +1,6 @@
 import React from 'react';
 
-import Header from '../components/Header';
+import Header from '../../../components/popup/Header';
 
 import type { AppConfig, AppSettings, LLMConfig } from '../types';
 

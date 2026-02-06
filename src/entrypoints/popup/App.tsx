@@ -1,26 +1,20 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { browser } from 'wxt/browser';
 import communicationService from './services/CommunicationService';
-import storageService, { type ChatSession as StoredChatSession } from './services/StorageService';
+import storageService from './services/StorageService';
 import { analyzeInputOnce, recognizeIntent } from './services/IntentService';
 import { extractEntities } from './services/EntityService';
 import { createLogger } from '../../utils/logger';
+import { useThemeSetting } from '../../hooks/useThemeSetting';
+import { useHistoryPanel } from '../../hooks/useHistoryPanel';
+import { useChatSessions } from '../../hooks/useChatSessions';
+import { usePopupSizing } from '../../hooks/usePopupSizing';
+import { useConfigState } from '../../hooks/useConfigState';
 
 import WelcomeView from './views/WelcomeView';
 import ConfigView from './views/ConfigView';
 import ChatView from './views/ChatView';
 
-import {
-  defaultConfig,
-  type AppConfig,
-  type AppProps,
-  type AppSettings,
-  type ComponentVersions,
-  type ConfigSection,
-  type LLMConfig,
-  type Message,
-  type TimelineItem,
-} from './types';
+import { type AppProps, type AppSettings, type ComponentVersions, type Message, type TimelineItem } from './types';
 
 const log = createLogger('popup');
 
@@ -29,25 +23,6 @@ const getStreamIntervalMs = (speed: AppSettings['streamSpeed'] | undefined) => {
   if (speed === 'fast') return 10;
   if (speed === 'slow') return 40;
   return 20;
-};
-
-const applyThemeSetting = (theme: AppSettings['theme'] | undefined, systemPrefersDark?: boolean) => {
-  if (typeof window === 'undefined') return;
-  const doc = window.document?.documentElement;
-  if (!doc) return;
-
-  const mode = theme || 'system';
-  if (mode === 'light' || mode === 'dark') {
-    doc.setAttribute('data-theme', mode);
-    doc.classList.toggle('dark', mode === 'dark');
-    return;
-  }
-
-  const isDark = typeof systemPrefersDark === 'boolean'
-    ? systemPrefersDark
-    : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  doc.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  doc.classList.toggle('dark', !!isDark);
 };
 
 const getFriendlyErrorMessage = (err: unknown) => {
@@ -64,21 +39,14 @@ const getFriendlyErrorMessage = (err: unknown) => {
 
 const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   const [view, setView] = useState<'welcome' | 'chat' | 'config'>('welcome');
-  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-
-  const [sessions, setSessions] = useState<StoredChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string>('');
 
   const [componentVersions, setComponentVersions] = useState<ComponentVersions>({});
   const [versionLoading, setVersionLoading] = useState(false);
 
-  const [config, setConfig] = useState<AppConfig>(() => defaultConfig);
   const [currentStep, setCurrentStep] = useState(1);
   const [activeConfigTab, setActiveConfigTab] = useState<'service' | 'llm' | 'app'>('service');
-  const [isConfigured, setIsConfigured] = useState(false);
-  const [isConfigSaved, setIsConfigSaved] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
   const [configEntry, setConfigEntry] = useState<'welcome' | 'chat'>('welcome');
 
@@ -86,10 +54,30 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   const [dbTestStatus, setDbTestStatus] = useState('');
   const [opsTestStatus, setOpsTestStatus] = useState('');
 
-  const HISTORY_ANIM_MS = 220;
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyMounted, setHistoryMounted] = useState(false);
-  const historyUnmountTimerRef = useRef<number | null>(null);
+  const { historyOpen, historyMounted, openHistory, closeHistory } = useHistoryPanel(220);
+  const {
+    messages,
+    setMessages,
+    sessions,
+    activeSessionId,
+    saveMessages,
+    clearChatHistory,
+    createNewSession,
+    switchSession,
+  } = useChatSessions({ closeHistory, log });
+  const {
+    config,
+    isConfigured,
+    isConfigSaved,
+    setIsConfigSaved,
+    hasServerConfig,
+    isStepComplete,
+    updateConfig,
+    updateLlmConfig,
+    saveConfig,
+  } = useConfigState({
+    onConfigured: () => setView('chat'),
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const steps = ['服务器配置', '数据库配置', '运管系统配置'];
@@ -98,187 +86,9 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const openHistory = useCallback(() => {
-    if (historyUnmountTimerRef.current != null) {
-      window.clearTimeout(historyUnmountTimerRef.current);
-      historyUnmountTimerRef.current = null;
-    }
-    setHistoryMounted(true);
-    window.requestAnimationFrame(() => setHistoryOpen(true));
-  }, []);
+  useThemeSetting(config.app?.theme);
 
-  const closeHistory = useCallback(() => {
-    setHistoryOpen(false);
-  }, []);
-
-  useEffect(() => {
-    if (!historyMounted) return;
-    if (historyOpen) return;
-
-    if (historyUnmountTimerRef.current != null) {
-      window.clearTimeout(historyUnmountTimerRef.current);
-      historyUnmountTimerRef.current = null;
-    }
-
-    historyUnmountTimerRef.current = window.setTimeout(() => {
-      setHistoryMounted(false);
-      historyUnmountTimerRef.current = null;
-    }, HISTORY_ANIM_MS);
-
-    return () => {
-      if (historyUnmountTimerRef.current != null) {
-        window.clearTimeout(historyUnmountTimerRef.current);
-        historyUnmountTimerRef.current = null;
-      }
-    };
-  }, [historyOpen, historyMounted, HISTORY_ANIM_MS]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mode = config.app?.theme ?? 'system';
-    const mql = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-
-    if (mode !== 'system' || !mql) {
-      applyThemeSetting(mode);
-      return;
-    }
-
-    const handler = (e?: MediaQueryListEvent) => {
-      applyThemeSetting('system', e ? e.matches : mql.matches);
-    };
-
-    handler();
-    if (mql.addEventListener) mql.addEventListener('change', handler);
-    else (mql as any).addListener(handler);
-
-    return () => {
-      if (mql.removeEventListener) mql.removeEventListener('change', handler);
-      else (mql as any).removeListener(handler);
-    };
-  }, [config.app?.theme]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const isConfigView = view === 'config';
-    const width = Math.min(window.innerWidth * 0.95, isConfigView ? 920 : 720);
-    const height = Math.min(window.innerHeight * 0.9, isConfigView ? 640 : 520);
-    window.postMessage(
-      { source: 'POELink', type: 'SET_UI_SIZE', width, height },
-      '*'
-    );
-  }, [view]);
-
-  // 加载配置和历史消息
-  useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      const savedConfig = await storageService.getConfig();
-      if (savedConfig && mounted) {
-        setConfig({
-          ...defaultConfig,
-          ...savedConfig,
-          llm: {
-            ...(defaultConfig.llm ?? { apiKey: '', provider: 'siliconflow', model: '' }),
-            ...(savedConfig.llm ?? {}),
-          },
-          app: {
-            ...defaultConfig.app,
-            ...((savedConfig as any).app ?? {}),
-          },
-        });
-        const hasServer = !!(savedConfig.server?.host?.trim() && savedConfig.server?.port?.trim());
-        setIsConfigured(hasServer);
-        setIsConfigSaved(true);
-        if (hasServer) {
-          setView('chat');
-        }
-      }
-
-      const init = await storageService.initSessions();
-      if (mounted) {
-        setSessions(init.sessions);
-        setActiveSessionId(init.activeSessionId);
-        const active = init.sessions.find(s => s && s.id === init.activeSessionId);
-        setMessages((active?.messages as any) ?? []);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const handler = (changes: Record<string, any>, areaName: string) => {
-      if (areaName !== 'local') return;
-
-      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_messages')) {
-        const next = changes.poelink_messages?.newValue as Message[] | undefined;
-        if (Array.isArray(next)) setMessages(next);
-        else if (next == null) setMessages([]);
-      }
-
-      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_sessions')) {
-        const next = changes.poelink_sessions?.newValue as StoredChatSession[] | undefined;
-        if (Array.isArray(next)) setSessions(next);
-        else if (next == null) setSessions([]);
-      }
-
-      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_active_session_id')) {
-        const nextId = changes.poelink_active_session_id?.newValue;
-        if (typeof nextId === 'string') setActiveSessionId(nextId);
-        else if (nextId == null) setActiveSessionId('');
-      }
-
-      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_config')) {
-        const nextCfg = changes.poelink_config?.newValue as AppConfig | undefined;
-        if (nextCfg) {
-          setConfig({
-            ...defaultConfig,
-            ...nextCfg,
-            llm: {
-              ...(defaultConfig.llm ?? { apiKey: '', provider: 'siliconflow', model: '' }),
-              ...(nextCfg.llm ?? {}),
-            },
-            app: {
-              ...defaultConfig.app,
-              ...((nextCfg as any).app ?? {}),
-            },
-          });
-          const hasServer = !!(nextCfg.server?.host?.trim() && nextCfg.server?.port?.trim());
-          setIsConfigured(hasServer);
-          setIsConfigSaved(true);
-        } else {
-          setConfig(defaultConfig);
-          setIsConfigured(false);
-          setIsConfigSaved(false);
-        }
-      }
-    };
-
-    browser.storage.onChanged.addListener(handler);
-    return () => browser.storage.onChanged.removeListener(handler);
-  }, []);
-
-  const hasServerConfig = useCallback(() => {
-    return !!(config.server?.host?.trim() && config.server?.port?.trim());
-  }, [config.server]);
-
-  const isStepComplete = useCallback((step: number) => {
-    switch (step) {
-      case 1:
-        return !!(config.server?.host?.trim() && config.server?.port?.trim());
-      case 2:
-        return !!(config.database?.address?.trim() && config.database?.user?.trim() && config.database?.pass?.trim());
-      case 3:
-        return !!(config.ops?.ip?.trim() && String(config.ops?.port ?? '').trim());
-      case 4:
-        return true;
-      default:
-        return false;
-    }
-  }, [config.server, config.database, config.ops]);
+  usePopupSizing({ view });
 
   const notifyUser = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const runtimeBrowser = (globalThis as any).browser ?? (globalThis as any).chrome;
@@ -293,67 +103,6 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     });
   }, []);
 
-  const saveMessages = useCallback(async (msgs: Message[]) => {
-    try {
-      let sid = activeSessionId;
-      if (!sid) {
-        const init = await storageService.initSessions();
-        sid = init.activeSessionId;
-        setSessions(init.sessions);
-        setActiveSessionId(init.activeSessionId);
-      }
-
-      await storageService.updateSessionMessages(sid, msgs as any);
-      const latest = await storageService.getSessions();
-      setSessions(latest);
-    } catch (err) {
-      log.warn('保存消息失败', err);
-    }
-  }, [activeSessionId]);
-
-  const clearChatHistory = useCallback(async () => {
-    try {
-      await storageService.clearChatHistory();
-      const init = await storageService.initSessions();
-      setSessions(init.sessions);
-      setActiveSessionId(init.activeSessionId);
-      const active = init.sessions.find(s => s && s.id === init.activeSessionId);
-      setMessages((active?.messages as any) ?? []);
-    } catch (err) {
-      log.warn('清除聊天记录失败', err);
-    }
-  }, []);
-
-  const createNewSession = useCallback(async () => {
-    if (messages.length === 0) {
-      closeHistory();
-      return;
-    }
-    try {
-      const session = await storageService.createSession([]);
-      const latest = await storageService.getSessions();
-      setSessions(latest);
-      setActiveSessionId(session.id);
-      setMessages([]);
-      closeHistory();
-    } catch (err) {
-      log.warn('创建会话失败', err);
-    }
-  }, [closeHistory, messages.length]);
-
-  const switchSession = useCallback(async (sessionId: string) => {
-    try {
-      const session = await storageService.activateSession(sessionId);
-      if (!session) return;
-      setActiveSessionId(session.id);
-      setMessages((session.messages as any) ?? []);
-      const latest = await storageService.getSessions();
-      setSessions(latest);
-      closeHistory();
-    } catch (err) {
-      log.warn('切换会话失败', err);
-    }
-  }, [closeHistory]);
 
   const handleSend = useCallback(async () => {
     const isChitChatInput = (text: string): boolean => {
@@ -537,31 +286,6 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     }
   }, [inputValue, isLoading, messages, saveMessages, config.configId, config.llm, config.app?.streamSpeed, hasServerConfig]);
 
-  const updateConfig = useCallback(<K extends ConfigSection, F extends keyof AppConfig[K]>(
-    section: K,
-    field: F,
-    value: AppConfig[K][F]
-  ) => {
-    setConfig(prev => ({
-      ...prev,
-      [section]: {
-        ...prev[section],
-        [field]: value,
-      },
-    }));
-    setIsConfigSaved(false);
-  }, []);
-
-  const updateLlmConfig = useCallback((field: keyof LLMConfig, value: string) => {
-    setConfig(prev => ({
-      ...prev,
-      llm: {
-        ...(prev.llm || { apiKey: '', provider: 'siliconflow', model: '' }),
-        [field]: value,
-      },
-    }));
-    setIsConfigSaved(false);
-  }, []);
 
   const testServer = useCallback(async () => {
     setServerTestStatus('测试中...');
@@ -736,25 +460,6 @@ const App: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     if (view !== 'chat') return;
     fetchComponentVersions();
   }, [view, fetchComponentVersions]);
-
-  const saveConfig = useCallback(async () => {
-    let configId: string | undefined;
-    try {
-      const validateResp = await communicationService.validateConfig(config);
-      configId = validateResp?.data?.data?.config_id;
-    } catch {
-      configId = undefined;
-    }
-    const nextConfig = {
-      ...config,
-      configId,
-      llm: config.llm ?? { apiKey: '', provider: 'siliconflow', model: '' }
-    };
-    await storageService.setConfig(nextConfig);
-    setConfig(nextConfig);
-    setIsConfigured(!!(nextConfig.server?.host?.trim() && nextConfig.server?.port?.trim()));
-    setIsConfigSaved(true);
-  }, [config]);
 
   const saveAndGoChat = useCallback(async () => {
     await saveConfig();

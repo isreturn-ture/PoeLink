@@ -1,8 +1,8 @@
 import React from 'react';
 
-import ChatInput from '../components/ChatInput';
-import Header from '../components/Header';
-import MessageBubble from '../components/MessageBubble';
+import ChatInput from '../../../components/popup/ChatInput';
+import Header from '../../../components/popup/Header';
+import MessageBubble from '../../../components/popup/MessageBubble';
 
 import type { ChatSession as StoredChatSession } from '../services/StorageService';
 import type { AppConfig, ComponentVersions, Message } from '../types';
