@@ -29,14 +29,17 @@ export default class ContentScript {
   // 防止悬浮球点击导致的 poelink:toggle 事件重复触发两次 togglePopup
   private suppressNextToggleEvent = false;
 
-  // 尺寸与缩放
-  private popupWidth = Math.min(window.innerWidth * 0.95, 720);
-  private popupHeight = Math.min(window.innerHeight * 0.85, 520);
+  // 尺寸与缩放（与 usePopupSizing 保持一致）
+  private popupWidth = Math.min(window.innerWidth * 0.95, 760);
+  private popupHeight = Math.min(window.innerHeight * 0.9, 620);
   private readonly MIN_WIDTH = 320;
   private readonly MIN_HEIGHT = 280;
   private readonly MAX_WIDTH = 1200;
   private readonly MAX_HEIGHT = 900;
   private readonly RESIZE_THRESHOLD = 2;
+  /** 缩放到小于此尺寸时自动收起为悬浮球 */
+  private readonly COLLAPSE_WIDTH = 480;
+  private readonly COLLAPSE_HEIGHT = 420;
 
   constructor(ctx: any) {
     this.ctx = ctx;
@@ -259,6 +262,25 @@ export default class ContentScript {
     this.popup.appendChild(this.popupHeader);
     this.popup.appendChild(content);
 
+    // 伸缩把手：供 PopupInteractionController 绑定拖拽缩放
+    const resizeHandles = [
+      { key: 'n', style: 'top:0;left:0;right:0;height:6px;cursor:n-resize' },
+      { key: 's', style: 'bottom:0;left:0;right:0;height:6px;cursor:s-resize' },
+      { key: 'e', style: 'top:0;right:0;bottom:0;width:6px;cursor:e-resize' },
+      { key: 'w', style: 'top:0;left:0;bottom:0;width:6px;cursor:w-resize' },
+      { key: 'ne', style: 'top:0;right:0;width:10px;height:10px;cursor:ne-resize' },
+      { key: 'nw', style: 'top:0;left:0;width:10px;height:10px;cursor:nw-resize' },
+      { key: 'se', style: 'bottom:0;right:0;width:10px;height:10px;cursor:se-resize' },
+      { key: 'sw', style: 'bottom:0;left:0;width:10px;height:10px;cursor:sw-resize' },
+    ];
+    resizeHandles.forEach(({ key, style }) => {
+      const handle = document.createElement('div');
+      handle.setAttribute('data-resize', key);
+      handle.setAttribute('aria-hidden', 'true');
+      handle.style.cssText = `position:absolute;${style};z-index:10;pointer-events:auto;`;
+      this.popup.appendChild(handle);
+    });
+
     container.appendChild(this.popup);
 
     this.reactRoot?.unmount();
@@ -319,13 +341,65 @@ export default class ContentScript {
       maxHeight: this.MAX_HEIGHT,
       resizeThreshold: this.RESIZE_THRESHOLD,
       dragThreshold: 5,
+      collapseThreshold: { width: this.COLLAPSE_WIDTH, height: this.COLLAPSE_HEIGHT },
       logUi,
       onSizeChange: ({ width, height }) => {
         this.popupWidth = width;
         this.popupHeight = height;
       },
+      onCollapseRequest: () => this.collapsePopupToBall(),
     });
     this.interactionController.bind();
+  }
+
+  /** 弹窗缩小到阈值时：播放收缩到悬浮球的动效，然后关闭弹窗 */
+  private collapsePopupToBall() {
+    if (!this.popup || !this.floatingBall) return;
+
+    this.popup.style.pointerEvents = 'none';
+    const popupRect = this.popup.getBoundingClientRect();
+    const ballRect = this.floatingBall.getBoundingClientRect();
+    const popupCenterX = popupRect.left + popupRect.width / 2;
+    const popupCenterY = popupRect.top + popupRect.height / 2;
+    const ballCenterX = ballRect.left + ballRect.width / 2;
+    const ballCenterY = ballRect.top + ballRect.height / 2;
+    const dx = ballCenterX - popupCenterX;
+    const dy = ballCenterY - popupCenterY;
+
+    const durationMs = 320;
+    this.popup.style.transition = `transform ${durationMs}ms ease-out, opacity ${durationMs}ms ease-out`;
+    this.popup.style.transform = `translate(${dx}px, ${dy}px) scale(0)`;
+    this.popup.style.opacity = '0';
+
+    this.floatingBall.classList.remove('opacity-0', 'pointer-events-none', 'scale-90');
+    this.floatingBall.style.transition = 'transform 0.25s ease-out';
+    this.floatingBall.style.transform = 'scale(0.6)';
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        this.floatingBall.style.transform = 'scale(1)';
+      });
+    });
+
+    let ended = false;
+    const onEnd = () => {
+      if (ended) return;
+      ended = true;
+      this.popup.removeEventListener('transitionend', onEnd);
+      if (!this.popup) return;
+      this.popup.style.transition = '';
+      this.popup.style.transform = '';
+      this.popup.style.opacity = '';
+      this.popup.style.pointerEvents = '';
+      if (this.floatingBall) {
+        this.floatingBall.style.transition = '';
+        this.floatingBall.style.transform = '';
+      }
+      this.hidePopup();
+      this.isPopupVisible = false;
+      logUi.info('弹窗已收缩为悬浮球');
+    };
+    this.popup.addEventListener('transitionend', onEnd);
+    setTimeout(onEnd, durationMs + 80);
   }
 
   private togglePopup() {

@@ -1,13 +1,32 @@
 import { defineBackground } from 'wxt/utils/define-background';
+import { browser } from 'wxt/browser';
 import { createLogger } from '../utils/logger';
 import type { Message } from './background/types';
 import { handleMessage } from './background/messageRouter';
 import { runCookieSyncTask } from './background/handlers/cookies';
+import {
+  startBackendStatusMonitor,
+  stopBackendStatusMonitor,
+} from './background/handlers/backendStatusMonitor';
+import { getBackendServerConfig } from './background/utils/config';
 
 const logBg = createLogger('background');
 
+async function syncStatusMonitor() {
+  const server = await getBackendServerConfig();
+  const hasServer = !!(server?.host?.trim() && server?.port);
+  if (hasServer) {
+    startBackendStatusMonitor();
+  } else {
+    stopBackendStatusMonitor();
+  }
+}
+
 export default defineBackground({
   main() {
+    // 根据配置启动/停止后端状态监控（配置现从 SQLite 读取）
+    syncStatusMonitor();
+
     // 监听扩展图标点击事件
     browser.action.onClicked.addListener((tab) => {
       if (tab.id) {

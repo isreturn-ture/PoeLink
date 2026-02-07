@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { browser } from 'wxt/browser';
 
 import communicationService from '../entrypoints/popup/services/CommunicationService';
 import storageService from '../entrypoints/popup/services/StorageService';
 import { defaultConfig, type AppConfig, type ConfigSection, type LLMConfig } from '../entrypoints/popup/types';
+import { applyThemeToDocument } from './useThemeSetting';
 
 type ConfigStateOptions = {
   onConfigured?: () => void;
@@ -47,40 +47,7 @@ export const useConfigState = ({ onConfigured }: ConfigStateOptions = {}) => {
     };
   }, [onConfigured]);
 
-  useEffect(() => {
-    const handler = (changes: Record<string, any>, areaName: string) => {
-      if (areaName !== 'local') return;
-
-      if (Object.prototype.hasOwnProperty.call(changes, 'poelink_config')) {
-        const nextCfg = changes.poelink_config?.newValue as AppConfig | undefined;
-        if (nextCfg) {
-          const merged: AppConfig = {
-            ...defaultConfig,
-            ...nextCfg,
-            llm: {
-              ...(defaultConfig.llm ?? { apiKey: '', provider: 'siliconflow', model: '' }),
-              ...(nextCfg.llm ?? {}),
-            },
-            app: {
-              ...defaultConfig.app,
-              ...((nextCfg as any).app ?? {}),
-            },
-          };
-          setConfig(merged);
-          const hasServer = !!(merged.server?.host?.trim() && merged.server?.port?.trim());
-          setIsConfigured(hasServer);
-          setIsConfigSaved(true);
-        } else {
-          setConfig(defaultConfig);
-          setIsConfigured(false);
-          setIsConfigSaved(false);
-        }
-      }
-    };
-
-    browser.storage.onChanged.addListener(handler);
-    return () => browser.storage.onChanged.removeListener(handler);
-  }, []);
+  // 配置现存 SQLite，不再监听 browser.storage.onChanged
 
   const hasServerConfig = useCallback(() => {
     return !!(config.server?.host?.trim() && config.server?.port?.trim());
@@ -138,15 +105,17 @@ export const useConfigState = ({ onConfigured }: ConfigStateOptions = {}) => {
     } catch {
       configId = undefined;
     }
-    const nextConfig = {
+    const nextConfig: AppConfig = {
       ...config,
       configId,
       llm: config.llm ?? { apiKey: '', provider: 'siliconflow', model: '' },
+      app: config.app ?? defaultConfig.app,
     };
     await storageService.setConfig(nextConfig);
     setConfig(nextConfig);
     setIsConfigured(!!(nextConfig.server?.host?.trim() && nextConfig.server?.port?.trim()));
     setIsConfigSaved(true);
+    applyThemeToDocument(nextConfig.app?.theme);
   }, [config]);
 
   return {

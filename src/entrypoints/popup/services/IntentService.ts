@@ -1,5 +1,7 @@
 import { createLogger } from '../../../utils/logger';
 import communicationService from './CommunicationService';
+import type { LLMConfig } from '../types';
+import { getApiBaseUrl, resolveModel } from '../utils/llmConfig';
 
 const logIntent = createLogger('intent');
 
@@ -12,13 +14,6 @@ export interface IntentResult {
   confidence: number;
   description: string;
   ai_analysis?: Record<string, unknown>;
-}
-
-export interface LLMConfig {
-  apiKey: string;
-  provider: 'moonshot' | 'openai' | 'siliconflow';
-  baseURL?: string;
-  model?: string;
 }
 
 export interface CombinedAnalysisResult {
@@ -87,24 +82,6 @@ function localRecognizeIntent(input: string): IntentResult {
     confidence: highestScore,
     description: INTENTS[bestIntent as keyof typeof INTENTS].description
   };
-}
-
-function getApiBaseUrl(config: LLMConfig): string {
-  if (config.baseURL) return config.baseURL;
-  if (config.provider === 'moonshot') return 'https://api.moonshot.cn/v1';
-  if (config.provider === 'siliconflow') return 'https://api.siliconflow.cn/v1';
-  return 'https://api.openai.com/v1';
-}
-
-function getDefaultModel(config: LLMConfig): string {
-  if (config.provider === 'moonshot') return 'moonshot-v1-8k';
-  if (config.provider === 'siliconflow') return 'THUDM/GLM-Z1-9B-0414';
-  return 'gpt-3.5-turbo';
-}
-
-function resolveModel(config: LLMConfig): string {
-  const m = typeof config.model === 'string' ? config.model.trim() : '';
-  return m ? m : getDefaultModel(config);
 }
 
 function normalizeEntities(input: any): Record<string, unknown> {

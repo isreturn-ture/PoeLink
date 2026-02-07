@@ -12,8 +12,11 @@ type PopupInteractionOptions = {
   maxHeight: number;
   resizeThreshold: number;
   dragThreshold: number;
+  /** 当缩放后宽高同时小于此阈值时，触发收起为悬浮球 */
+  collapseThreshold?: { width: number; height: number };
   logUi?: LoggerLike;
   onSizeChange?: (size: { width: number; height: number }) => void;
+  onCollapseRequest?: () => void;
 };
 
 export default class PopupInteractionController {
@@ -26,8 +29,10 @@ export default class PopupInteractionController {
   private maxHeight: number;
   private resizeThreshold: number;
   private dragThreshold: number;
+  private collapseThreshold: { width: number; height: number } | null = null;
   private logUi?: LoggerLike;
   private onSizeChange?: (size: { width: number; height: number }) => void;
+  private onCollapseRequest?: () => void;
 
   private isDragging = false;
   private dragTarget: HTMLElement | null = null;
@@ -62,8 +67,10 @@ export default class PopupInteractionController {
     this.maxHeight = options.maxHeight;
     this.resizeThreshold = options.resizeThreshold;
     this.dragThreshold = options.dragThreshold;
+    this.collapseThreshold = options.collapseThreshold ?? null;
     this.logUi = options.logUi;
     this.onSizeChange = options.onSizeChange;
+    this.onCollapseRequest = options.onCollapseRequest;
   }
 
   public bind() {
@@ -250,6 +257,13 @@ export default class PopupInteractionController {
 
     const end = () => {
       if (!this.isResizing) return;
+      const currentWidth = this.popup.getBoundingClientRect().width;
+      const currentHeight = this.popup.getBoundingClientRect().height;
+      const shouldCollapse =
+        this.collapseThreshold &&
+        currentWidth <= this.collapseThreshold.width &&
+        currentHeight <= this.collapseThreshold.height;
+
       this.isResizing = false;
       this.resizeKey = null;
       this.resizeStarted = false;
@@ -278,6 +292,11 @@ export default class PopupInteractionController {
       if (this.prevHtmlUserSelect !== null) {
         document.documentElement.style.userSelect = this.prevHtmlUserSelect;
         this.prevHtmlUserSelect = null;
+      }
+
+      if (shouldCollapse && this.onCollapseRequest) {
+        this.logUi?.debug?.('resize below collapse threshold', { currentWidth, currentHeight });
+        this.onCollapseRequest();
       }
     };
 

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { browser } from 'wxt/browser';
 import communicationService from './services/CommunicationService';
 import { analyzeInputOnce, recognizeIntent } from './services/IntentService';
 import { extractEntities } from './services/EntityService';
@@ -8,6 +9,8 @@ import { useHistoryPanel } from '../../hooks/useHistoryPanel';
 import { useChatSessions } from '../../hooks/useChatSessions';
 import { usePopupSizing } from '../../hooks/usePopupSizing';
 import { useConfigState } from '../../hooks/useConfigState';
+import { createAppI18n } from '../../i18n';
+import type { AppI18nKey } from '../../i18n';
 
 import WelcomeView from './views/WelcomeView';
 import ConfigView from './views/ConfigView';
@@ -24,14 +27,14 @@ const getStreamIntervalMs = (speed: AppSettings['streamSpeed'] | undefined) => {
   return 20;
 };
 
-const getFriendlyErrorMessage = (err: unknown) => {
-  if (typeof err === 'string') return '服务暂时不可用，请稍后再试。';
+const getFriendlyErrorMessage = (err: unknown, t: (k: AppI18nKey) => string) => {
+  if (typeof err === 'string') return t('serviceUnavailable');
   if (err && typeof err === 'object' && 'message' in err) {
     const raw = String((err as { message?: string }).message ?? '');
-    if (raw.toLowerCase().includes('network')) return '网络异常，请检查网络连接后再试。';
-    if (raw.toLowerCase().includes('fetch')) return '服务暂时不可用，请稍后再试。';
+    if (raw.toLowerCase().includes('network')) return t('networkError');
+    if (raw.toLowerCase().includes('fetch')) return t('serviceUnavailable');
   }
-  return '服务暂时不可用，请稍后再试。';
+  return t('serviceUnavailable');
 };
 
 const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
@@ -50,6 +53,8 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   const [serverTestStatus, setServerTestStatus] = useState('');
   const [dbTestStatus, setDbTestStatus] = useState('');
   const [opsTestStatus, setOpsTestStatus] = useState('');
+  /** 后端在线状态：true=在线, false=离线, null=检测中/未知 */
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
 
   const { historyOpen, historyMounted, openHistory, closeHistory } = useHistoryPanel(220);
   const {
@@ -77,7 +82,12 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const steps = ['服务器配置', '数据库配置', '运管系统配置'];
+  const lang = config.app?.language ?? 'zh-CN';
+  const { t } = useMemo(() => createAppI18n(lang), [lang]);
+  const steps = useMemo(
+    () => [t('stepServer'), t('stepDatabase'), t('stepOps')],
+    [t]
+  );
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -86,10 +96,34 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
   useThemeSetting(config.app?.theme);
   usePopupSizing({ view });
 
-  const notifyUser = useCallback((message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    const runtimeBrowser = (globalThis as any).browser ?? (globalThis as any).chrome;
-    const iconUrl = runtimeBrowser?.runtime?.getURL
-      ? runtimeBrowser.runtime.getURL('icon/icons8-bot-32.png')
+  // 后端状态：进入聊天页时获取，并订阅 storage 实时更新
+  useEffect(() => {
+    if (!hasServerConfig()) {
+      setBackendOnline(null);
+      return;
+    }
+    const fetchStatus = async (immediate = false) => {
+      try {
+        const status = await communicationService.getBackendStatus(immediate);
+        setBackendOnline(status?.online ?? null);
+      } catch {
+        setBackendOnline(false);
+      }
+    };
+    // 进入聊天页时触发即时检测
+    fetchStatus(view === 'chat');
+    const handler = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {
+      if (areaName !== 'local' || !changes.poelink_backend_status) return;
+      const next = changes.poelink_backend_status.newValue as { online?: boolean } | undefined;
+      setBackendOnline(next?.online ?? null);
+    };
+    browser.storage.onChanged.addListener(handler);
+    return () => browser.storage.onChanged.removeListener(handler);
+  }, [hasServerConfig, config.server?.host, config.server?.port, view]);
+
+  const notifyUser = useCallback((message: string, _type: 'success' | 'error' | 'info' = 'info') => {
+    const iconUrl = typeof browser?.runtime?.getURL === 'function'
+      ? browser.runtime.getURL('icon/icons8-bot-32.png')
       : undefined;
     communicationService.sendNotification({
       type: 'basic',
@@ -115,13 +149,14 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     if (!hasServerConfig()) {
       const tipMsg: Message = {
         role: 'assistant',
-        content: '当前未完成配置，AMR 排查暂不可用。请先进入配置中心填写服务器信息。',
+        content: t('configRequired'),
       };
       setMessages([...messages, tipMsg]);
       saveMessages([...messages, tipMsg]);
       setView('config');
       return;
     }
+    if (backendOnline === false) return;
 
     const userMsg: Message = { role: 'user', content: inputValue.trim() };
     const optimisticMsgs = [...messages, userMsg];
@@ -156,7 +191,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       const forceChitChat = isChitChatInput(userMsg.content);
       if (forceChitChat) {
-        const fallback = '你好，我是 PoeLink 助手。你可以描述需要排查的问题，或提供任务号/车号/时间范围，我会帮你分析。';
+        const fallback = t('helloFallback');
         const normalizedReply = (assistantReply && String(assistantReply).trim()) || fallback;
         assistantReply = normalizedReply;
         intentResult = {
@@ -170,7 +205,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
       if (intentResult?.intent === 'unknown' && assistantReply) {
         const aiMsg: Message = {
           role: 'assistant',
-          content: String(assistantReply).trim() || '你好，有什么我可以帮你的吗？'
+          content: String(assistantReply).trim() || t('helloDefault')
         };
         const nextMsgs = [...optimisticMsgs, aiMsg];
         setMessages(nextMsgs);
@@ -204,7 +239,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       let content = typeof res === 'string'
         ? res
-        : (res.result ?? res.message ?? '服务暂时不可用，请稍后再试。');
+        : (res.result ?? res.message ?? t('serviceUnavailable'));
 
       let downloadUrl: string | undefined;
       let downloadLabel: string | undefined;
@@ -220,7 +255,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
           const port = config.server?.port ? `:${config.server.port}` : '';
           const serverUrl = `${protocol}://${host}${port}`;
           downloadUrl = rawUrl.startsWith('http') ? rawUrl : `${serverUrl}${rawUrl}`;
-          downloadLabel = filename ? `下载 ${filename}` : '下载诊断日志';
+          downloadLabel = filename ? t('downloadFile', { filename }) : t('downloadDiagnosticLog');
         }
         const candidateTimeline = (res as any).data?.timeline
           ?? (res as any).data?.data?.timeline
@@ -265,41 +300,43 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
       log.error('API 调用失败', err);
       const errMsg: Message = {
         role: 'assistant',
-        content: `抱歉，请求失败。${getFriendlyErrorMessage(err)}`,
+        content: t('requestFailed') + getFriendlyErrorMessage(err, t),
       };
       setMessages([...optimisticMsgs, errMsg]);
       saveMessages([...optimisticMsgs, errMsg]);
     } finally {
       setIsLoading(false);
     }
-  }, [inputValue, isLoading, messages, saveMessages, config.configId, config.llm, config.app?.streamSpeed, hasServerConfig]);
+  }, [inputValue, isLoading, messages, saveMessages, config.configId, config.llm, config.app?.streamSpeed, hasServerConfig, backendOnline, t]);
 
   const testServer = useCallback(async () => {
-    setServerTestStatus('测试中...');
+    setServerTestStatus(t('testing'));
     try {
-      const ok = await communicationService.healthCheck(config.server);
-      setServerTestStatus(ok.success ? '连接成功' : `失败：${ok.error || '未知'}`);
+      const result = await communicationService.healthCheck(config.server);
+      setServerTestStatus(
+        result.success ? t('connectSuccess') : `${t('connectFailed')}: ${result.error || t('unknown')}`
+      );
     } catch (e: any) {
-      setServerTestStatus(`异常：${getFriendlyErrorMessage(e)}`);
+      setServerTestStatus(`${t('connectError')}: ${getFriendlyErrorMessage(e)}`);
     }
-  }, [config.server]);
+  }, [config.server, t]);
 
   const testDatabase = useCallback(async () => {
-    setDbTestStatus('测试中...');
+    setDbTestStatus(t('testing'));
     try {
       const res = await communicationService.callApiJson('/api/db/check', {
         method: 'POST',
         body: config.database,
         timeoutMs: 15000,
       });
-      setDbTestStatus((res as any).success ? '连接成功' : `失败: ${(res as any).message || '未知错误'}`);
+      setDbTestStatus((res as any).success ? t('connectSuccess') : `${t('connectFailed')}: ${(res as any).message || t('unknown')}`);
     } catch (e: any) {
-      setDbTestStatus(`异常：${getFriendlyErrorMessage(e)}`);
+      setDbTestStatus(`${t('connectError')}: ${getFriendlyErrorMessage(e)}`);
     }
-  }, [config.database]);
+  }, [config.database, t]);
 
   const testOps = useCallback(async () => {
-    setOpsTestStatus('测试中...');
+    setOpsTestStatus(t('testing'));
     try {
       const res = await communicationService.callApiJson('/api/ops-service/connect/check', {
         method: 'POST',
@@ -311,17 +348,18 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
       });
       const ok = typeof (res as any)?.success === 'boolean' ? (res as any).success : true;
       const msg = (res as any)?.message || (res as any)?.error;
-      setOpsTestStatus(ok ? '连接成功' : `失败: ${msg || '未知错误'}`);
+      setOpsTestStatus(ok ? t('connectSuccess') : `${t('connectFailed')}: ${msg || t('unknown')}`);
     } catch (e: any) {
-      setOpsTestStatus(`异常：${getFriendlyErrorMessage(e)}`);
+      setOpsTestStatus(`${t('connectError')}: ${getFriendlyErrorMessage(e)}`);
     }
-  }, [config.ops]);
+  }, [config.ops, t]);
 
   const fetchComponentVersions = useCallback(async () => {
     if (!hasServerConfig()) return;
     if (!isConfigSaved) return;
     setVersionLoading(true);
     try {
+      // 精简默认返回：GET /api/ops-service/packages/version（无 includeItems）
       const res = await communicationService.callApiJson('/api/ops-service/packages/version', {
         method: 'GET',
         query: {
@@ -338,28 +376,53 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       const payload = unwrap(res);
 
-      const readDirect = (obj: any): ComponentVersions | null => {
-        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-        const getStr = (...keys: string[]) => {
-          for (const k of keys) {
-            const v = obj?.[k];
-            if (typeof v === 'string' && v.trim()) return v.trim();
-          }
-          return undefined;
-        };
-        const rcs = getStr('rcs', 'RCS', 'rcsVersion', 'rcs_version', 'rcs_ver', 'rcsVer');
-        const iwms = getStr('iwms', 'IWMS', 'iwmsVersion', 'iwms_version', 'iwms_ver', 'iwmsVer', 'wms', 'WMS', 'wmsVersion', 'wms_version');
-        const ops = getStr('ops', 'OPS', 'opsVersion', 'ops_version', 'ops_ver', 'opsVer');
-        if (!rcs && !iwms && !ops) return null;
-        return { rcs, iwms, ops };
+      const pickVersionFromPkg = (pkg: any): string | undefined => {
+        if (!pkg || typeof pkg !== 'object') return undefined;
+        const keys = [
+          'version',
+          'productVersion',
+          'product_version',
+          'versionNo',
+          'version_no',
+          'displayVersion',
+          'display_version',
+          'releaseVersion',
+          'release_version',
+          'pkgVersion',
+          'pkg_version',
+          'packageVersion',
+          'package_version',
+        ];
+        for (const k of keys) {
+          const v = pkg[k];
+          if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+        return undefined;
       };
 
-      const direct = readDirect(payload);
-      if (direct) {
-        setComponentVersions(direct);
-        return;
+      // 1. 优先解析新格式：{ version, source, packages: { wms: {...}, rcs1: {...}, ops: {...} } }
+      const packages = payload?.packages;
+      if (packages && typeof packages === 'object' && !Array.isArray(packages)) {
+        const versions: ComponentVersions = {};
+        for (const [key, pkg] of Object.entries(packages)) {
+          const ver = pickVersionFromPkg(pkg);
+          if (!ver) continue;
+          const keyLower = key.toLowerCase();
+          if (!versions.rcs && (keyLower.includes('rcs') || keyLower.includes('rcms') || keyLower.includes('rtas'))) {
+            versions.rcs = ver;
+          } else if (!versions.iwms && (keyLower.includes('wms') || keyLower.includes('iwms'))) {
+            versions.iwms = ver;
+          } else if (!versions.ops && keyLower.includes('ops')) {
+            versions.ops = ver;
+          }
+        }
+        if (versions.rcs || versions.iwms || versions.ops) {
+          setComponentVersions(versions);
+          return;
+        }
       }
 
+      // 2. 回退旧格式：opsTree 不可用时，兼容 /package/product 等旧接口返回的 items/list/rows
       const list = Array.isArray(payload)
         ? payload
         : (Array.isArray(payload?.items)
@@ -369,6 +432,16 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
             : (Array.isArray(payload?.rows)
               ? payload.rows
               : [])));
+
+      const pickCode = (item: any) => {
+        const candidates = [
+          item?.productCode,
+          item?.product_code,
+          item?.code,
+        ];
+        const v = candidates.find((x) => typeof x === 'string' && x.trim());
+        return typeof v === 'string' ? v : '';
+      };
 
       const pickName = (item: any) => {
         const candidates = [
@@ -383,44 +456,12 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
         return typeof v === 'string' ? v : '';
       };
 
-      const pickCode = (item: any) => {
-        const candidates = [
-          item?.productCode,
-          item?.product_code,
-          item?.code,
-        ];
-        const v = candidates.find((x) => typeof x === 'string' && x.trim());
-        return typeof v === 'string' ? v : '';
-      };
-
-      const pickVersion = (item: any) => {
-        const candidates = [
-          item?.version,
-          item?.productVersion,
-          item?.product_version,
-          item?.versionNo,
-          item?.version_no,
-          item?.productVersionNo,
-          item?.product_version_no,
-          item?.displayVersion,
-          item?.display_version,
-          item?.releaseVersion,
-          item?.release_version,
-          item?.pkgVersion,
-          item?.pkg_version,
-          item?.packageVersion,
-          item?.package_version,
-        ];
-        const v = candidates.find((x) => typeof x === 'string' && x.trim());
-        return typeof v === 'string' ? v : '';
-      };
-
       const versions: ComponentVersions = {};
       for (const item of list) {
         const code = pickCode(item).toLowerCase();
         const name = pickName(item).toLowerCase();
         const key = `${code} ${name}`;
-        const ver = pickVersion(item);
+        const ver = pickVersionFromPkg(item);
         if (!ver) continue;
         if (!versions.rcs && (key.includes('rcs') || key.includes('rcms') || key.includes('rtas'))) {
           versions.rcs = ver;
@@ -457,7 +498,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
   const serverConfigured = hasServerConfig();
 
-  const downloadLog = async () => {
+  const downloadLog = useCallback(async () => {
     try {
       const res = await communicationService.downloadLog('latest.log');
       if (res.success && res.data) {
@@ -467,28 +508,37 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        notifyUser('日志已下载', 'success');
+        notifyUser(t('logDownloaded'), 'success');
       } else {
-        notifyUser('日志下载失败: ' + (res.error || '未知错误'), 'error');
+        notifyUser(t('logDownloadFailed') + ': ' + (res.error || t('unknown')), 'error');
       }
     } catch (e: any) {
-      notifyUser('下载异常: ' + e.message, 'error');
+      notifyUser(t('downloadError') + ': ' + e.message, 'error');
     }
-  };
+  }, [t, notifyUser]);
 
-  const syncCookies = async () => {
+  const syncCookies = useCallback(async () => {
     try {
       await communicationService.sendMessageToBackground({ type: 'TRIGGER_COOKIE_SYNC' });
-      notifyUser('已触发 Cookie 同步', 'success');
+      notifyUser(t('cookieSyncTriggered'), 'success');
     } catch {
-      notifyUser('触发 Cookie 同步失败', 'error');
+      notifyUser(t('cookieSyncFailed'), 'error');
     }
-  };
+  }, [t, notifyUser]);
+
+  const retryBackendStatus = useCallback(async () => {
+    try {
+      await communicationService.getBackendStatus(true);
+    } catch {
+      // 静默失败，storage 会更新
+    }
+  }, []);
 
   const body = (() => {
     if (view === 'welcome') {
       return (
         <WelcomeView
+          lang={lang}
           onStartConfig={() => {
             setConfigEntry('welcome');
             setActiveConfigTab('service');
@@ -500,18 +550,18 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
     }
 
     if (view === 'config') {
-      const pageTitle = isConfigured ? '配置中心' : '配置向导';
-      const pageSubtitle = isConfigured ? '调整排查助手的连接与能力配置' : '完成以下设置以启用 AMR 排查功能';
+      const pageTitle = isConfigured ? t('configCenter') : t('configWizard');
+      const pageSubtitle = isConfigured ? t('configCenterSubtitle') : t('configWizardSubtitle');
       const canProceed = isStepComplete(currentStep);
       const canEnterChat = isStepComplete(1) && isStepComplete(2) && isStepComplete(3);
 
       const handleNextStep = async () => {
         if (!canProceed) {
-          notifyUser('请先完成当前步骤配置', 'error');
+          notifyUser(t('pleaseCompleteStep'), 'error');
           return;
         }
         if (!isConfigSaved) {
-          const shouldSave = window.confirm('当前配置尚未保存，是否先保存再继续？');
+          const shouldSave = window.confirm(t('saveBeforeContinue'));
           if (shouldSave) {
             await saveConfig();
           }
@@ -521,7 +571,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       const handleSaveAndGoChat = () => {
         if (!canEnterChat) {
-          notifyUser('请先完成服务配置', 'error');
+          notifyUser(t('pleaseCompleteService'), 'error');
           return;
         }
         saveAndGoChat();
@@ -529,12 +579,10 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
 
       const handleSaveConfig = () => {
         saveConfig().then(() => {
-          setSaveNotice('配置已保存');
+          setSaveNotice(t('configSaved'));
           window.setTimeout(() => setSaveNotice(''), 2000);
         });
       };
-
-      const lang = config.app?.language ?? 'zh-CN';
 
       return (
         <ConfigView
@@ -567,7 +615,7 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
           handleSaveAndGoChat={handleSaveAndGoChat}
           handleGotoLlmTab={() => {
             if (!canProceed) {
-              notifyUser('请先完成当前步骤配置', 'error');
+              notifyUser(t('pleaseCompleteStep'), 'error');
               return;
             }
             setActiveConfigTab('llm');
@@ -583,7 +631,10 @@ const MainApp: React.FC<AppProps> = ({ onClose, showCloseInHeader = true }) => {
       <ChatView
         onClose={onClose}
         showCloseInHeader={showCloseInHeader}
+        lang={lang}
         serverConfigured={serverConfigured}
+        backendOnline={backendOnline}
+        onRetryStatus={retryBackendStatus}
         versionLoading={versionLoading}
         componentVersions={componentVersions}
         config={config}

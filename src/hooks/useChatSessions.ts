@@ -23,7 +23,7 @@ export const useChatSessions = ({ closeHistory, log }: { closeHistory: () => voi
         setSessions(initResult.sessions);
         setActiveSessionId(initResult.activeSessionId);
         const activeSession = initResult.sessions.find(s => s && s.id === initResult.activeSessionId);
-        setMessages((activeSession?.messages as any) ?? []);
+        setMessages(Array.isArray(activeSession?.messages) ? activeSession.messages : []);
       }
     })();
 
@@ -70,7 +70,7 @@ export const useChatSessions = ({ closeHistory, log }: { closeHistory: () => voi
         setActiveSessionId(initResult.activeSessionId);
       }
 
-      await storageService.updateSessionMessages(sessionId, nextMessages as any);
+      await storageService.updateSessionMessages(sessionId, nextMessages);
       const latestSessions = await storageService.getSessions();
       setSessions(latestSessions);
     } catch (err) {
@@ -86,7 +86,7 @@ export const useChatSessions = ({ closeHistory, log }: { closeHistory: () => voi
       setSessions(initResult.sessions);
       setActiveSessionId(initResult.activeSessionId);
       const activeSession = initResult.sessions.find(s => s && s.id === initResult.activeSessionId);
-      setMessages((activeSession?.messages as any) ?? []);
+      setMessages(Array.isArray(activeSession?.messages) ? activeSession.messages : []);
     } catch (err) {
       log?.warn?.('清除聊天记录失败', err);
     }
@@ -116,7 +116,7 @@ export const useChatSessions = ({ closeHistory, log }: { closeHistory: () => voi
       const nextSession = await storageService.activateSession(sessionId);
       if (!nextSession) return;
       setActiveSessionId(nextSession.id);
-      setMessages((nextSession.messages as any) ?? []);
+      setMessages(Array.isArray(nextSession.messages) ? nextSession.messages : []);
       const latestSessions = await storageService.getSessions();
       setSessions(latestSessions);
       closeHistory();

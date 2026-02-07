@@ -1,11 +1,11 @@
 import type { PoeLinkConfig, ServerConfig } from '../types';
 import type { LoggerLike } from '../sharedTypes';
+import { dbGetConfig } from '../db/sqlite';
 
 export async function getPoeLinkConfig(logBg?: LoggerLike) {
   try {
-    const result = await browser.storage.local.get(['poelink_config']);
-    const config = result.poelink_config as PoeLinkConfig | undefined;
-    return config || null;
+    const config = await dbGetConfig();
+    return config as PoeLinkConfig | null;
   } catch (error) {
     logBg?.error?.('获取服务器配置失败', error);
     return null;
@@ -64,6 +64,14 @@ export function buildBaseUrl(server: ServerConfig) {
   const host = server.host || server.ip || '';
   const port = server.port ? `:${server.port}` : '';
   return `${protocol}://${host}${port}`;
+}
+
+export function buildWsUrl(server: ServerConfig) {
+  const protocol = String(server.protocol || 'http').toLowerCase();
+  const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
+  const host = server.host || server.ip || '';
+  const port = server.port ? `:${server.port}` : '';
+  return `${wsProtocol}://${host}${port}/ws`;
 }
 
 export function buildServerIdentifier(server: any) {

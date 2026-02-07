@@ -80,6 +80,6 @@ export async function runCookieSyncTask(force: boolean, logBg?: LoggerLike) {
       logBg?.info?.('自动同步 Cookie 成功', { count: filteredCookies.length });
     }
   } catch (error) {
-    // ignore silent errors
+    logBg?.debug?.('自动同步 Cookie 跳过或失败', error);
   }
 }

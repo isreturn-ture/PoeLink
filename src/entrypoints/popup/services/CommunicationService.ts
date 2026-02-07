@@ -182,6 +182,17 @@ class CommunicationService {
   }
 
   /**
+   * 获取后端实时状态（在线/离线）
+   * @param immediate 是否立即触发一次检测
+   */
+  async getBackendStatus(immediate = false): Promise<{ online: boolean; lastCheck: number; checking?: boolean; error?: string } | null> {
+    return this.sendMessageToBackground({
+      type: 'GET_BACKEND_STATUS',
+      immediate
+    });
+  }
+
+  /**
    * 下载日志
    */
   async downloadLog(filename: string): Promise<any> {
@@ -196,8 +207,7 @@ class CommunicationService {
    */
   async sendNotification(options: any): Promise<void> {
     try {
-      const runtimeBrowser = (globalThis as any).browser ?? (globalThis as any).chrome;
-      const notificationsApi = runtimeBrowser?.notifications;
+      const notificationsApi = browser?.notifications;
       logComm.debug('[Notify] request', options);
       if (typeof Notification !== 'undefined') {
         logComm.debug('[Notify] permission before', Notification.permission);

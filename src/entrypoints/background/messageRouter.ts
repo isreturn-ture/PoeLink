@@ -3,6 +3,12 @@ import type { LoggerLike } from './sharedTypes';
 import { handleProxyRequest, handleExternalRequest } from './handlers/requests';
 import { handleCookieSync, handleGetCookies, runCookieSyncTask } from './handlers/cookies';
 import { handleHealthCheck, handleConfigValidation, handleLogDownload } from './handlers/system';
+import {
+  getBackendStatus,
+  markBackendOffline,
+  triggerImmediateCheck,
+} from './handlers/backendStatusMonitor';
+import { handleStorageMessage } from './handlers/storage';
 
 export async function handleMessage(request: Message, _sender: any, logBg: LoggerLike) {
   switch (request.type) {
@@ -33,8 +39,15 @@ export async function handleMessage(request: Message, _sender: any, logBg: Logge
       return { success: false, error: '无活动标签页' };
     }
 
-    case 'PROXY_REQUEST':
-      return await handleProxyRequest(request.endpoint, request.options);
+    case 'PROXY_REQUEST': {
+      try {
+        const result = await handleProxyRequest(request.endpoint, request.options);
+        return result;
+      } catch (err) {
+        await markBackendOffline();
+        throw err;
+      }
+    }
 
     case 'EXTERNAL_REQUEST':
       return await handleExternalRequest(request.url, request.options);
@@ -52,6 +65,14 @@ export async function handleMessage(request: Message, _sender: any, logBg: Logge
     case 'HEALTH_CHECK':
       return await handleHealthCheck(request.server);
 
+    case 'GET_BACKEND_STATUS': {
+      const immediate = request.immediate === true;
+      if (immediate) {
+        return await triggerImmediateCheck();
+      }
+      return await getBackendStatus();
+    }
+
     case 'VALIDATE_CONFIG':
       return await handleConfigValidation(request.config);
 
@@ -59,6 +80,9 @@ export async function handleMessage(request: Message, _sender: any, logBg: Logge
       return await handleLogDownload(request.filename);
 
     default:
+      if (request.type.startsWith('STORAGE_')) {
+        return await handleStorageMessage(request.type, request);
+      }
       return { success: false, error: '未知消息类型' };
   }
 }

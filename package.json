@@ -7,15 +7,17 @@
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
+    "build": "npm run copy-wasm && wxt build",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare && npm run copy-wasm",
+    "copy-wasm": "node -e \"const fs=require('fs');const p=require('path');const src=p.join(p.dirname(require.resolve('sql.js')),'sql-wasm.wasm');const dest=p.join(process.cwd(),'public','sql-wasm.wasm');fs.mkdirSync(p.dirname(dest),{recursive:true});fs.copyFileSync(src,dest);console.log('Copied sql-wasm.wasm to public/');\""
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
+    "sql.js": "^1.11.0",
     "rehype-slug": "^6.0.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

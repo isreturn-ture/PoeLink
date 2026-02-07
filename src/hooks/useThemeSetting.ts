@@ -1,51 +1,46 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 
 import type { AppSettings } from '../entrypoints/popup/types';
 
-// 根据配置与系统偏好应用主题
-const applyThemeSetting = (theme: AppSettings['theme'] | undefined, systemPrefersDark?: boolean) => {
-  if (typeof window === 'undefined') return;
-  const documentElement = window.document?.documentElement;
-  if (!documentElement) return;
+/** 根据配置与系统偏好，将 data-theme 应用到 document.documentElement（Tailwind 主题切换），可导出供保存配置后立即应用 */
+export function applyThemeToDocument(theme: AppSettings['theme'] | undefined, systemPrefersDark?: boolean) {
+  if (typeof document === 'undefined') return;
+  const el = document.documentElement;
+  if (!el) return;
 
-  const themeMode = theme || 'system';
-  if (themeMode === 'light' || themeMode === 'dark') {
-    documentElement.setAttribute('data-theme', themeMode);
-    documentElement.classList.toggle('dark', themeMode === 'dark');
+  const mode = theme || 'system';
+  if (mode === 'light' || mode === 'dark') {
+    el.setAttribute('data-theme', mode);
+    el.classList.toggle('dark', mode === 'dark');
     return;
   }
 
-  const isDark = typeof systemPrefersDark === 'boolean'
-    ? systemPrefersDark
-    : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-  documentElement.classList.toggle('dark', !!isDark);
-};
+  const isDark =
+    typeof systemPrefersDark === 'boolean'
+      ? systemPrefersDark
+      : typeof window !== 'undefined' &&
+        window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  el.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  el.classList.toggle('dark', !!isDark);
+}
 
-export const useThemeSetting = (theme: AppSettings['theme'] | undefined) => {
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const themeMode = theme ?? 'system';
-    const mediaQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+export function useThemeSetting(theme: AppSettings['theme'] | undefined) {
+  // 使用 useLayoutEffect 在绘制前同步应用主题，避免切换时页面无变化
+  useLayoutEffect(() => {
+    const mode = theme ?? 'system';
+    const mq = typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : null;
 
-    if (themeMode !== 'system' || !mediaQuery) {
-      // 非系统模式或缺少媒体查询时直接应用
-      applyThemeSetting(themeMode);
+    if (mode !== 'system' || !mq) {
+      applyThemeToDocument(mode);
       return;
     }
 
-    const handleSchemeChange = (event?: MediaQueryListEvent) => {
-      applyThemeSetting('system', event ? event.matches : mediaQuery.matches);
+    const handleChange = (e?: MediaQueryListEvent) => {
+      applyThemeToDocument('system', e ? e.matches : mq.matches);
     };
 
-    // 初始化并监听系统主题变化
-    handleSchemeChange();
-    if (mediaQuery.addEventListener) mediaQuery.addEventListener('change', handleSchemeChange);
-    else (mediaQuery as any).addListener(handleSchemeChange);
-
-    return () => {
-      if (mediaQuery.removeEventListener) mediaQuery.removeEventListener('change', handleSchemeChange);
-      else (mediaQuery as any).removeListener(handleSchemeChange);
-    };
+    handleChange();
+    mq.addEventListener?.('change', handleChange);
+    return () => mq.removeEventListener?.('change', handleChange);
   }, [theme]);
-};
+}

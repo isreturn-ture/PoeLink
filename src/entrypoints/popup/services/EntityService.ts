@@ -1,5 +1,7 @@
 import { createLogger } from '../../../utils/logger';
 import communicationService from './CommunicationService';
+import type { LLMConfig } from '../types';
+import { getApiBaseUrl, resolveModel } from '../utils/llmConfig';
 
 const logEntity = createLogger('entity');
 
@@ -17,13 +19,6 @@ export interface ExtractedEntities {
   error_type: string | null;
   system_type: string | null;
   original_input?: string;
-}
-
-export interface LLMConfig {
-  apiKey: string;
-  provider: 'moonshot' | 'openai' | 'siliconflow';
-  baseURL?: string;
-  model?: string;
 }
 
 const PATTERNS = {
@@ -93,24 +88,6 @@ function localExtractEntities(input: string): ExtractedEntities {
   else if (lowerInput.includes('规划')) result.system_type = '规划系统';
 
   return result;
-}
-
-function getApiBaseUrl(config: LLMConfig): string {
-  if (config.baseURL) return config.baseURL;
-  if (config.provider === 'moonshot') return 'https://api.moonshot.cn/v1';
-  if (config.provider === 'siliconflow') return 'https://api.siliconflow.cn/v1';
-  return 'https://api.openai.com/v1';
-}
-
-function getDefaultModel(config: LLMConfig): string {
-  if (config.provider === 'moonshot') return 'moonshot-v1-8k';
-  if (config.provider === 'siliconflow') return 'THUDM/GLM-Z1-9B-0414';
-  return 'gpt-3.5-turbo';
-}
-
-function resolveModel(config: LLMConfig): string {
-  const m = typeof config.model === 'string' ? config.model.trim() : '';
-  return m ? m : getDefaultModel(config);
 }
 
 export async function extractEntities(
